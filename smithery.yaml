@@ -1,0 +1,26 @@
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+
+startCommand:
+  type: stdio
+  configSchema:
+    # JSON Schema defining the configuration options for the MCP.
+    type: object
+    properties:
+      tradovateAppId:
+        type: string
+        description: API App Id for Tradovate. Optional for mock mode.
+      tradovateSecret:
+        type: string
+        description: API secret for Tradovate. Optional for mock mode.
+      port:
+        type: number
+        default: 8080
+        description: Port the MCP server listens on
+  commandFunction:
+    # A JS function that produces the CLI command based on the given config to start the MCP on stdio.
+    |-
+    (config) => { const env = Object.assign({}, process.env); if(config.tradovateAppId) { env.TRADOVATE_APP_ID = config.tradovateAppId; } if(config.tradovateSecret) { env.TRADOVATE_SECRET = config.tradovateSecret; } env.PORT = config.port ? config.port.toString() : '8080'; return { command: 'node', args: ['build/index.js'], env }; }
+  exampleConfig:
+    tradovateAppId: dummy-app-id
+    tradovateSecret: dummy-secret
+    port: 8080
