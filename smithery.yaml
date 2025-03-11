@@ -1,26 +1,78 @@
-# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+# Smithery configuration file: https://smithery.ai/docs/deployments
 
 startCommand:
   type: stdio
   configSchema:
     # JSON Schema defining the configuration options for the MCP.
     type: object
+    required:
+      - tradovateUsername
+      - tradovatePassword
     properties:
+      tradovateApiEnvironment:
+        type: string
+        enum: ["demo", "live"]
+        default: "demo"
+        description: "Tradovate API environment (demo or live)"
+      tradovateUsername:
+        type: string
+        description: "Your Tradovate account username"
+      tradovatePassword:
+        type: string
+        description: "Your Tradovate account password"
       tradovateAppId:
         type: string
-        description: API App Id for Tradovate. Optional for mock mode.
+        description: "Your Tradovate API application ID"
+      tradovateAppVersion:
+        type: string
+        default: "1.0.0"
+        description: "Your Tradovate API application version"
+      tradovateDeviceId:
+        type: string
+        description: "Your Tradovate device ID (from API settings screen in your dashboard)"
+      tradovateCid:
+        type: string
+        description: "Your Tradovate API client ID"
       tradovateSecret:
         type: string
-        description: API secret for Tradovate. Optional for mock mode.
-      port:
-        type: number
-        default: 8080
-        description: Port the MCP server listens on
+        description: "Your Tradovate API secret key"
   commandFunction:
-    # A JS function that produces the CLI command based on the given config to start the MCP on stdio.
+    # A function that produces the CLI command to start the MCP on stdio.
     |-
-    (config) => { const env = Object.assign({}, process.env); if(config.tradovateAppId) { env.TRADOVATE_APP_ID = config.tradovateAppId; } if(config.tradovateSecret) { env.TRADOVATE_SECRET = config.tradovateSecret; } env.PORT = config.port ? config.port.toString() : '8080'; return { command: 'node', args: ['build/index.js'], env }; }
+    (config) => ({ 
+      command: 'node', 
+      args: ['build/index.js'], 
+      env: { 
+        TRADOVATE_API_ENVIRONMENT: config.tradovateApiEnvironment,
+        TRADOVATE_USERNAME: config.tradovateUsername,
+        TRADOVATE_PASSWORD: config.tradovatePassword,
+        TRADOVATE_APP_ID: config.tradovateAppId,
+        TRADOVATE_APP_VERSION: config.tradovateAppVersion,
+        TRADOVATE_DEVICE_ID: config.tradovateDeviceId,
+        TRADOVATE_CID: config.tradovateCid,
+        TRADOVATE_SECRET: config.tradovateSecret
+      } 
+    })
   exampleConfig:
-    tradovateAppId: dummy-app-id
-    tradovateSecret: dummy-secret
-    port: 8080
+    tradovateApiEnvironment: "demo"
+    tradovateUsername: "your_username"
+    tradovatePassword: "your_password"
+    tradovateAppId: "your_app_id"
+    tradovateAppVersion: "1.0.0"
+    tradovateDeviceId: "your_device_id"
+    tradovateCid: "your_cid"
+    tradovateSecret: "your_secret"
+
+metadata:
+  name: "Tradovate MCP Server"
+  description: "An MCP Server for managing Tradovate Contract and Order Positions"
+  author: "alexanimal"
+  version: "0.1.0"
+  tags:
+    - trading
+    - finance
+    - tradovate
+    - contracts
+    - positions
+    - orders
+  documentation: "https://github.com/alexanimal/tradovate-mcp-server"
