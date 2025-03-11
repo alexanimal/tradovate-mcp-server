@@ -4,20 +4,30 @@ FROM node:lts-alpine
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files first (for better caching)
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install --ignore-scripts
+# Temporarily modify package.json to remove the prepare script
+RUN sed -i 's/"prepare": "npm run build",/"prepare": "",/g' package.json
 
-# Copy source code
-COPY . .
+# Install all dependencies including dev dependencies for building
+RUN npm ci
+
+# Copy source code and configuration files
+COPY tsconfig.json ./
+COPY src/ ./src/
+COPY tests/ ./tests/
 
 # Build the project
 RUN npm run build
 
+# Remove dev dependencies to make the image smaller
+RUN npm prune --omit=dev
+
 # Expose port (if applicable)
-EXPOSE 8080
+# Note: MCP servers typically don't need a port exposed as they use stdio
+# But if your server needs a port, uncomment and set the correct port
+# EXPOSE 8080
 
 # Run the MCP server
-CMD ["node", "build/index.js"]
+CMD ["node", "build/src/index.js"]
