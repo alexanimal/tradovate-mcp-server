@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "An MCP Server for Tradovate Tools",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "bin": {
     "tradovate-mcp-server": "./build/src/index.js"
