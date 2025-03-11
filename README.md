@@ -2,6 +2,9 @@
 
 [![smithery badge](https://smithery.ai/badge/@alexanimal/tradovate-mcp-server)](https://smithery.ai/server/@alexanimal/tradovate-mcp-server)
 
+![Code Coverage](https://img.shields.io/badge/coverage-17.31%25-red)
+[![codecov](https://codecov.io/gh/YOUR_USERNAME/tradovate-mcp-server/branch/main/graph/badge.svg)](https://codecov.io/gh/YOUR_USERNAME/tradovate-mcp-server)
+
 A Model Context Protocol (MCP) server for interacting with the Tradovate API. This server provides tools for managing contracts, positions, orders, and accounts in Tradovate.
 
 ## Features
@@ -22,7 +25,7 @@ npm install
 
 3. Create a `.env` file with your Tradovate credentials:
 
-```
+```bash
 TRADOVATE_API_ENVIRONMENT=demo
 TRADOVATE_USERNAME=your_username
 TRADOVATE_PASSWORD=your_password
@@ -32,12 +35,18 @@ TRADOVATE_CID=your_cid
 TRADOVATE_SEC=your_sec
 ```
 
-## Running the Server
+## Usage
 
 Start the server:
 
 ```bash
 npm start
+```
+
+Or use with the MCP Inspector:
+
+```bash
+npm run inspector
 ```
 
 ## Development
@@ -51,9 +60,15 @@ npm start
 - `src/types.ts` - TypeScript type definitions
 - `tests/` - Test files
 
+### Building
+
+```bash
+npm run build
+```
+
 ### Testing
 
-Run the tests:
+Run tests:
 
 ```bash
 npm test
@@ -65,10 +80,10 @@ Run tests with coverage:
 npm run test:coverage
 ```
 
-Run tests in watch mode:
+Generate coverage badge:
 
 ```bash
-npm run test:watch
+npm run coverage:badge
 ```
 
 ## Available Tools
@@ -89,17 +104,21 @@ The server provides the following tools:
 The server interacts with the following Tradovate API endpoints:
 
 ### Authentication
+
 - `/auth/accessTokenRequest` - Get access token
 - `/auth/renewAccessToken` - Renew access token
 
 ### Contracts
+
 - `/contract/list` - List all contracts
 - `/contract/find` - Find a specific contract
 
 ### Positions
+
 - `/position/list` - List all positions
 
 ### Orders
+
 - `/order/list` - List all orders
 - `/order/placeOrder` - Place a new order
 - `/order/modifyOrder` - Modify an existing order
@@ -107,15 +126,17 @@ The server interacts with the following Tradovate API endpoints:
 - `/order/liquidatePosition` - Liquidate a position
 
 ### Accounts
+
 - `/account/list` - List all accounts
 - `/account/find` - Find a specific account
 - `/cashBalance/getCashBalanceSnapshot` - Get cash balance for an account
 
 ### Market Data
+
 - `/md/getQuote` - Get quote data
 - `/md/getDOM` - Get depth of market data
 - `/md/getChart` - Get chart data
 
 ## License
 
-MIT
+Private

@@ -428,11 +428,17 @@ export async function main() {
 }
 
 // Only run main if this file is executed directly
-// In ES Modules, we use import.meta.url to check if this file is being run directly
-const isMainModule = import.meta.url.endsWith(process.argv[1].replace(/^file:\/\//, ''));
-if (isMainModule) {
-  main().catch((error) => {
-    console.error("Server error:", error);
-    process.exit(1);
-  });
+// Check if we're in a test environment
+const isTestEnvironment = process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined;
+
+// Skip the main execution in test environment
+if (!isTestEnvironment) {
+  // Simple check to see if this file is being run directly
+  const isMainModule = process.argv.length > 1 && process.argv[1].includes('index');
+  if (isMainModule) {
+    main().catch((error) => {
+      console.error("Server error:", error);
+      process.exit(1);
+    });
+  }
 }
