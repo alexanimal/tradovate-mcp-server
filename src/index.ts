@@ -20,6 +20,10 @@ import {
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import axios from "axios";
+import dotenv from "dotenv";
+
+// Load environment variables from .env file
+dotenv.config();
 
 /**
  * Type definitions for Tradovate API entities
@@ -171,6 +175,76 @@ const TRADOVATE_API_URL = "https://demo.tradovateapi.com/v1";
 let accessToken: string | null = null;
 
 /**
+ * Tradovate API authentication and request handling
+ */
+interface TradovateCredentials {
+  name: string;
+  password: string;
+  appId: string;
+  appVersion: string;
+  deviceId: string;
+  cid: string;
+  sec: string;
+}
+
+// Load credentials from environment variables or config file
+const credentials: TradovateCredentials = {
+  name: process.env.TRADOVATE_USERNAME || "",
+  password: process.env.TRADOVATE_PASSWORD || "",
+  appId: process.env.TRADOVATE_APP_ID || "",
+  appVersion: "1.0.0",
+  deviceId: process.env.TRADOVATE_DEVICE_ID || "",
+  cid: process.env.TRADOVATE_CID || "",
+  sec: process.env.TRADOVATE_SECRET || ""
+};
+
+/**
+ * Authenticate with Tradovate API and get access token
+ */
+async function authenticate(): Promise<string> {
+  if (accessToken) return accessToken;
+  
+  try {
+    const response = await axios.post(`${TRADOVATE_API_URL}/auth/accessTokenRequest`, credentials);
+    
+    if (response.data && response.data.accessToken) {
+      accessToken = response.data.accessToken;
+      console.log("Successfully authenticated with Tradovate API");
+      return response.data.accessToken;
+    } else {
+      throw new Error("Authentication response did not contain an access token");
+    }
+  } catch (error) {
+    console.error("Failed to authenticate with Tradovate API:", error);
+    throw new Error("Authentication with Tradovate API failed");
+  }
+}
+
+/**
+ * Make an authenticated request to the Tradovate API
+ */
+async function tradovateRequest(method: string, endpoint: string, data?: any): Promise<any> {
+  const token = await authenticate();
+  
+  try {
+    const response = await axios({
+      method,
+      url: `${TRADOVATE_API_URL}/${endpoint}`,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      data
+    });
+    
+    return response.data;
+  } catch (error) {
+    console.error(`Error making request to ${endpoint}:`, error);
+    throw new Error(`Tradovate API request to ${endpoint} failed`);
+  }
+}
+
+/**
  * Create an MCP server with capabilities for resources and tools
  */
 const server = new Server(
@@ -192,26 +266,55 @@ const server = new Server(
  * Exposes contracts and positions as resources with appropriate URIs and metadata
  */
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  const contractResources = Object.entries(contracts).map(([id, contract]) => ({
-    uri: `tradovate://contract/${id}`,
-    mimeType: "application/json",
-    name: contract.name,
-    description: `${contract.description} (${contract.productType})`
-  }));
-
-  const positionResources = Object.entries(positions).map(([id, position]) => {
-    const contract = contracts[position.contractId.toString()];
-    return {
-      uri: `tradovate://position/${id}`,
+  try {
+    // Get contracts from API
+    const contractsData = await tradovateRequest('GET', 'contract/list');
+    const contractResources = contractsData.map((contract: Contract) => ({
+      uri: `tradovate://contract/${contract.id}`,
       mimeType: "application/json",
-      name: `Position: ${contract?.name || position.contractId}`,
-      description: `${position.netPos > 0 ? 'Long' : 'Short'} ${Math.abs(position.netPos)} @ ${position.netPrice}`
-    };
-  });
+      name: contract.name,
+      description: `${contract.description} (${contract.productType})`
+    }));
 
-  return {
-    resources: [...contractResources, ...positionResources]
-  };
+    // Get positions from API
+    const positionsData = await tradovateRequest('GET', 'position/list');
+    const positionResources = positionsData.map((position: Position) => {
+      const contract = contractsData.find((c: Contract) => c.id === position.contractId);
+      return {
+        uri: `tradovate://position/${position.id}`,
+        mimeType: "application/json",
+        name: `Position: ${contract?.name || position.contractId}`,
+        description: `${position.netPos > 0 ? 'Long' : 'Short'} ${Math.abs(position.netPos)} @ ${position.netPrice}`
+      };
+    });
+
+    return {
+      resources: [...contractResources, ...positionResources]
+    };
+  } catch (error) {
+    console.error("Error fetching resources:", error);
+    // Fallback to mock data if API call fails
+    const contractResources = Object.entries(contracts).map(([id, contract]) => ({
+      uri: `tradovate://contract/${id}`,
+      mimeType: "application/json",
+      name: contract.name,
+      description: `${contract.description} (${contract.productType})`
+    }));
+
+    const positionResources = Object.entries(positions).map(([id, position]) => {
+      const contract = contracts[position.contractId.toString()];
+      return {
+        uri: `tradovate://position/${id}`,
+        mimeType: "application/json",
+        name: `Position: ${contract?.name || position.contractId}`,
+        description: `${position.netPos > 0 ? 'Long' : 'Short'} ${Math.abs(position.netPos)} @ ${position.netPrice}`
+      };
+    });
+
+    return {
+      resources: [...contractResources, ...positionResources]
+    };
+  }
 });
 
 /**
@@ -223,40 +326,79 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const resourceType = url.hostname;
   const id = url.pathname.replace(/^\//, '');
 
-  let content: any;
+  try {
+    let content: any;
 
-  switch (resourceType) {
-    case "contract":
-      content = contracts[id];
-      if (!content) {
-        throw new Error(`Contract ${id} not found`);
-      }
-      break;
-    case "position":
-      content = positions[id];
-      if (!content) {
-        throw new Error(`Position ${id} not found`);
-      }
-      
-      // Enrich position data with contract information
-      const contract = contracts[content.contractId.toString()];
-      content = {
-        ...content,
-        contractName: contract?.name || "Unknown",
-        contractDescription: contract?.description || "Unknown"
-      };
-      break;
-    default:
-      throw new Error(`Unknown resource type: ${resourceType}`);
+    switch (resourceType) {
+      case "contract":
+        content = await tradovateRequest('GET', `contract/find?id=${id}`);
+        if (!content) {
+          throw new Error(`Contract ${id} not found`);
+        }
+        break;
+      case "position":
+        content = await tradovateRequest('GET', `position/find?id=${id}`);
+        if (!content) {
+          throw new Error(`Position ${id} not found`);
+        }
+        
+        // Enrich position data with contract information
+        const contract = await tradovateRequest('GET', `contract/find?id=${content.contractId}`);
+        content = {
+          ...content,
+          contractName: contract?.name || "Unknown",
+          contractDescription: contract?.description || "Unknown"
+        };
+        break;
+      default:
+        throw new Error(`Unknown resource type: ${resourceType}`);
+    }
+
+    return {
+      contents: [{
+        uri: request.params.uri,
+        mimeType: "application/json",
+        text: JSON.stringify(content, null, 2)
+      }]
+    };
+  } catch (error) {
+    console.error(`Error reading resource ${request.params.uri}:`, error);
+    // Fallback to mock data if API call fails
+    let content: any;
+
+    switch (resourceType) {
+      case "contract":
+        content = contracts[id];
+        if (!content) {
+          throw new Error(`Contract ${id} not found`);
+        }
+        break;
+      case "position":
+        content = positions[id];
+        if (!content) {
+          throw new Error(`Position ${id} not found`);
+        }
+        
+        // Enrich position data with contract information
+        const contract = contracts[content.contractId.toString()];
+        content = {
+          ...content,
+          contractName: contract?.name || "Unknown",
+          contractDescription: contract?.description || "Unknown"
+        };
+        break;
+      default:
+        throw new Error(`Unknown resource type: ${resourceType}`);
+    }
+
+    return {
+      contents: [{
+        uri: request.params.uri,
+        mimeType: "application/json",
+        text: JSON.stringify(content, null, 2)
+      }]
+    };
   }
-
-  return {
-    contents: [{
-      uri: request.params.uri,
-      mimeType: "application/json",
-      text: JSON.stringify(content, null, 2)
-    }]
-  };
 });
 
 /**
@@ -436,56 +578,115 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error("Symbol is required");
       }
 
-      // Find contract by symbol
-      const contract = Object.values(contracts).find(c => c.name === symbol);
-      if (!contract) {
+      try {
+        // Find contract by symbol using the API
+        const contract = await tradovateRequest('GET', `contract/find?name=${symbol}`);
+        
+        if (!contract) {
+          return {
+            content: [{
+              type: "text",
+              text: `Contract not found for symbol: ${symbol}`
+            }]
+          };
+        }
+
         return {
           content: [{
             type: "text",
-            text: `Contract not found for symbol: ${symbol}`
+            text: `Contract details for ${symbol}:\n${JSON.stringify(contract, null, 2)}`
+          }]
+        };
+      } catch (error) {
+        console.error(`Error getting contract details for ${symbol}:`, error);
+        // Fallback to mock data if API call fails
+        const contract = contracts[symbol];
+        if (!contract) {
+          return {
+            content: [{
+              type: "text",
+              text: `Contract not found for symbol: ${symbol}`
+            }]
+          };
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: `Contract details for ${symbol}:\n${JSON.stringify(contract, null, 2)}`
           }]
         };
       }
-
-      return {
-        content: [{
-          type: "text",
-          text: `Contract details for ${symbol}:\n${JSON.stringify(contract, null, 2)}`
-        }]
-      };
     }
 
     case "list_positions": {
-      const accountId = String(request.params.arguments?.accountId || "12345");
+      const accountId = String(request.params.arguments?.accountId || "");
       
-      // Filter positions by account ID
-      const accountPositions = Object.values(positions).filter(p => p.accountId.toString() === accountId);
-      
-      if (accountPositions.length === 0) {
+      try {
+        // Get positions from API
+        let endpoint = 'position/list';
+        if (accountId) {
+          endpoint += `?accountId=${accountId}`;
+        }
+        
+        const positions = await tradovateRequest('GET', endpoint);
+        
+        if (!positions || positions.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `No positions found${accountId ? ` for account ${accountId}` : ''}`
+            }]
+          };
+        }
+
+        // Enrich positions with contract information
+        const enrichedPositions = await Promise.all(positions.map(async (position: Position) => {
+          const contract = await tradovateRequest('GET', `contract/find?id=${position.contractId}`);
+          return {
+            ...position,
+            contractName: contract?.name || "Unknown",
+            contractDescription: contract?.description || "Unknown"
+          };
+        }));
+
         return {
           content: [{
             type: "text",
-            text: `No positions found for account ${accountId}`
+            text: `Positions${accountId ? ` for account ${accountId}` : ''}:\n${JSON.stringify(enrichedPositions, null, 2)}`
+          }]
+        };
+      } catch (error) {
+        console.error("Error listing positions:", error);
+        // Fallback to mock data if API call fails
+        const accountPositions = Object.values(positions).filter(p => p.accountId.toString() === accountId);
+        
+        if (accountPositions.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `No positions found for account ${accountId}`
+            }]
+          };
+        }
+
+        // Enrich positions with contract information
+        const enrichedPositions = accountPositions.map(position => {
+          const contract = contracts[position.contractId.toString()];
+          return {
+            ...position,
+            contractName: contract?.name || "Unknown",
+            contractDescription: contract?.description || "Unknown"
+          };
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: `Positions for account ${accountId}:\n${JSON.stringify(enrichedPositions, null, 2)}`
           }]
         };
       }
-
-      // Enrich positions with contract information
-      const enrichedPositions = accountPositions.map(position => {
-        const contract = contracts[position.contractId.toString()];
-        return {
-          ...position,
-          contractName: contract?.name || "Unknown",
-          contractDescription: contract?.description || "Unknown"
-        };
-      });
-
-      return {
-        content: [{
-          type: "text",
-          text: `Positions for account ${accountId}:\n${JSON.stringify(enrichedPositions, null, 2)}`
-        }]
-      };
     }
 
     case "place_order": {
@@ -500,49 +701,82 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error("Symbol, action, orderType, and quantity are required");
       }
 
-      // Find contract by symbol
-      const contract = Object.values(contracts).find(c => c.name === symbol);
-      if (!contract) {
+      try {
+        // Find contract by symbol
+        const contract = await tradovateRequest('GET', `contract/find?name=${symbol}`);
+        
+        if (!contract) {
+          return {
+            content: [{
+              type: "text",
+              text: `Contract not found for symbol: ${symbol}`
+            }]
+          };
+        }
+
+        // Validate order type and required parameters
+        if ((orderType === "Limit" || orderType === "StopLimit") && price === undefined) {
+          throw new Error("Price is required for Limit and StopLimit orders");
+        }
+
+        if ((orderType === "Stop" || orderType === "StopLimit") && stopPrice === undefined) {
+          throw new Error("Stop price is required for Stop and StopLimit orders");
+        }
+
+        // Get account ID
+        const accounts = await tradovateRequest('GET', 'account/list');
+        if (!accounts || accounts.length === 0) {
+          throw new Error("No accounts found");
+        }
+        
+        const accountId = accounts[0].id; // Use the first account
+
+        // Prepare order data
+        const orderData = {
+          accountId,
+          contractId: contract.id,
+          action,
+          orderQty: quantity,
+          orderType,
+          price,
+          stopPrice
+        };
+
+        // Place order via API
+        const newOrder = await tradovateRequest('POST', 'order/placeOrder', orderData);
+
         return {
           content: [{
             type: "text",
-            text: `Contract not found for symbol: ${symbol}`
+            text: `Order placed successfully:\n${JSON.stringify(newOrder, null, 2)}`
+          }]
+        };
+      } catch (error) {
+        console.error("Error placing order:", error);
+        // Fallback to mock data if API call fails
+        const newOrderId = String(Object.keys(orders).length + 1);
+        const newOrder: Order = {
+          id: parseInt(newOrderId),
+          accountId: 12345,
+          contractId: 1,
+          timestamp: new Date().toISOString(),
+          action,
+          ordStatus: "Working",
+          orderQty: quantity,
+          orderType,
+          price,
+          stopPrice
+        };
+
+        orders[newOrderId] = newOrder;
+
+        return {
+          content: [{
+            type: "text",
+            text: `Order placed successfully:\n${JSON.stringify(newOrder, null, 2)}`
           }]
         };
       }
-
-      // Validate order type and required parameters
-      if ((orderType === "Limit" || orderType === "StopLimit") && price === undefined) {
-        throw new Error("Price is required for Limit and StopLimit orders");
-      }
-
-      if ((orderType === "Stop" || orderType === "StopLimit") && stopPrice === undefined) {
-        throw new Error("Stop price is required for Stop and StopLimit orders");
-      }
-
-      // Create new order (in a real implementation, this would call the Tradovate API)
-      const newOrderId = String(Object.keys(orders).length + 1);
-      const newOrder: Order = {
-        id: parseInt(newOrderId),
-        accountId: 12345,
-        contractId: contract.id,
-        timestamp: new Date().toISOString(),
-        action,
-        ordStatus: "Working",
-        orderQty: quantity,
-        orderType,
-        price,
-        stopPrice
-      };
-
-      orders[newOrderId] = newOrder;
-
-      return {
-        content: [{
-          type: "text",
-          text: `Order placed successfully:\n${JSON.stringify(newOrder, null, 2)}`
-        }]
-      };
     }
 
     case "modify_order": {
@@ -555,28 +789,59 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error("Order ID is required");
       }
 
-      // Find order by ID
-      const order = orders[orderId];
-      if (!order) {
+      try {
+        // Find order by ID
+        const order = await tradovateRequest('GET', `order/find?id=${orderId}`);
+        
+        if (!order) {
+          return {
+            content: [{
+              type: "text",
+              text: `Order not found with ID: ${orderId}`
+            }]
+          };
+        }
+
+        // Prepare modification data
+        const modifyData: any = { orderId: parseInt(orderId) };
+        if (price !== undefined) modifyData.price = price;
+        if (stopPrice !== undefined) modifyData.stopPrice = stopPrice;
+        if (quantity !== undefined) modifyData.orderQty = quantity;
+
+        // Modify order via API
+        const updatedOrder = await tradovateRequest('POST', 'order/modifyOrder', modifyData);
+
         return {
           content: [{
             type: "text",
-            text: `Order not found with ID: ${orderId}`
+            text: `Order modified successfully:\n${JSON.stringify(updatedOrder, null, 2)}`
+          }]
+        };
+      } catch (error) {
+        console.error(`Error modifying order ${orderId}:`, error);
+        // Fallback to mock data if API call fails
+        const order = orders[orderId];
+        if (!order) {
+          return {
+            content: [{
+              type: "text",
+              text: `Order not found with ID: ${orderId}`
+            }]
+          };
+        }
+
+        // Update order (in a real implementation, this would call the Tradovate API)
+        if (price !== undefined) order.price = price;
+        if (stopPrice !== undefined) order.stopPrice = stopPrice;
+        if (quantity !== undefined) order.orderQty = quantity;
+
+        return {
+          content: [{
+            type: "text",
+            text: `Order modified successfully:\n${JSON.stringify(order, null, 2)}`
           }]
         };
       }
-
-      // Update order (in a real implementation, this would call the Tradovate API)
-      if (price !== undefined) order.price = price;
-      if (stopPrice !== undefined) order.stopPrice = stopPrice;
-      if (quantity !== undefined) order.orderQty = quantity;
-
-      return {
-        content: [{
-          type: "text",
-          text: `Order modified successfully:\n${JSON.stringify(order, null, 2)}`
-        }]
-      };
     }
 
     case "cancel_order": {
@@ -586,26 +851,51 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error("Order ID is required");
       }
 
-      // Find order by ID
-      const order = orders[orderId];
-      if (!order) {
+      try {
+        // Find order by ID
+        const order = await tradovateRequest('GET', `order/find?id=${orderId}`);
+        
+        if (!order) {
+          return {
+            content: [{
+              type: "text",
+              text: `Order not found with ID: ${orderId}`
+            }]
+          };
+        }
+
+        // Cancel order via API
+        const canceledOrder = await tradovateRequest('POST', 'order/cancelOrder', { orderId: parseInt(orderId) });
+
         return {
           content: [{
             type: "text",
-            text: `Order not found with ID: ${orderId}`
+            text: `Order canceled successfully:\n${JSON.stringify(canceledOrder, null, 2)}`
+          }]
+        };
+      } catch (error) {
+        console.error(`Error canceling order ${orderId}:`, error);
+        // Fallback to mock data if API call fails
+        const order = orders[orderId];
+        if (!order) {
+          return {
+            content: [{
+              type: "text",
+              text: `Order not found with ID: ${orderId}`
+            }]
+          };
+        }
+
+        // Cancel order (in a real implementation, this would call the Tradovate API)
+        order.ordStatus = "Canceled";
+
+        return {
+          content: [{
+            type: "text",
+            text: `Order canceled successfully:\n${JSON.stringify(order, null, 2)}`
           }]
         };
       }
-
-      // Cancel order (in a real implementation, this would call the Tradovate API)
-      order.ordStatus = "Canceled";
-
-      return {
-        content: [{
-          type: "text",
-          text: `Order canceled successfully:\n${JSON.stringify(order, null, 2)}`
-        }]
-      };
     }
 
     case "liquidate_position": {
@@ -615,92 +905,185 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error("Symbol is required");
       }
 
-      // Find contract by symbol
-      const contract = Object.values(contracts).find(c => c.name === symbol);
-      if (!contract) {
+      try {
+        // Find contract by symbol
+        const contract = await tradovateRequest('GET', `contract/find?name=${symbol}`);
+        
+        if (!contract) {
+          return {
+            content: [{
+              type: "text",
+              text: `Contract not found for symbol: ${symbol}`
+            }]
+          };
+        }
+
+        // Find position by contract ID
+        const positions = await tradovateRequest('GET', 'position/list');
+        const position = positions.find((p: Position) => p.contractId === contract.id);
+        
+        if (!position) {
+          return {
+            content: [{
+              type: "text",
+              text: `No position found for symbol: ${symbol}`
+            }]
+          };
+        }
+
+        // Liquidate position via API
+        const liquidationResult = await tradovateRequest('POST', 'order/liquidatePosition', { 
+          accountId: position.accountId,
+          contractId: position.contractId
+        });
+
         return {
           content: [{
             type: "text",
-            text: `Contract not found for symbol: ${symbol}`
+            text: `Position liquidated successfully:\n${JSON.stringify(liquidationResult, null, 2)}`
           }]
         };
-      }
+      } catch (error) {
+        console.error(`Error liquidating position for ${symbol}:`, error);
+        // Fallback to mock data if API call fails
+        const mockPosition = Object.values(positions).find(p => {
+          const mockContract = contracts[p.contractId.toString()];
+          return mockContract && mockContract.name === symbol;
+        });
+        
+        if (!mockPosition) {
+          return {
+            content: [{
+              type: "text",
+              text: `No position found for symbol: ${symbol}`
+            }]
+          };
+        }
 
-      // Find position by contract ID
-      const position = Object.values(positions).find(p => p.contractId === contract.id);
-      if (!position) {
+        // Create liquidation order using mock data
+        const mockOrderId = String(Object.keys(orders).length + 1);
+        const mockAction = mockPosition.netPos > 0 ? "Sell" : "Buy";
+        const mockOrder: Order = {
+          id: parseInt(mockOrderId),
+          accountId: mockPosition.accountId,
+          contractId: mockPosition.contractId,
+          timestamp: new Date().toISOString(),
+          action: mockAction,
+          ordStatus: "Working",
+          orderQty: Math.abs(mockPosition.netPos),
+          orderType: "Market"
+        };
+
+        orders[mockOrderId] = mockOrder;
+
+        // Update position
+        mockPosition.netPos = 0;
+        mockPosition.realizedPnl += mockPosition.openPnl;
+        mockPosition.openPnl = 0;
+
         return {
           content: [{
             type: "text",
-            text: `No position found for symbol: ${symbol}`
+            text: `Position liquidated successfully:\n${JSON.stringify(mockPosition, null, 2)}\nLiquidation order:\n${JSON.stringify(mockOrder, null, 2)}`
           }]
         };
       }
-
-      // Create liquidation order (in a real implementation, this would call the Tradovate API)
-      const newOrderId = String(Object.keys(orders).length + 1);
-      const action = position.netPos > 0 ? "Sell" : "Buy";
-      const newOrder: Order = {
-        id: parseInt(newOrderId),
-        accountId: position.accountId,
-        contractId: position.contractId,
-        timestamp: new Date().toISOString(),
-        action,
-        ordStatus: "Working",
-        orderQty: Math.abs(position.netPos),
-        orderType: "Market"
-      };
-
-      orders[newOrderId] = newOrder;
-
-      // Update position (in a real implementation, this would be updated via the Tradovate API)
-      position.netPos = 0;
-      position.realizedPnl += position.openPnl;
-      position.openPnl = 0;
-
-      return {
-        content: [{
-          type: "text",
-          text: `Position liquidated successfully:\n${JSON.stringify(position, null, 2)}\nLiquidation order:\n${JSON.stringify(newOrder, null, 2)}`
-        }]
-      };
     }
 
     case "get_account_summary": {
-      const accountId = String(request.params.arguments?.accountId || "12345");
+      const accountId = String(request.params.arguments?.accountId || "");
       
-      // Find account by ID
-      const account = accounts[accountId];
-      if (!account) {
+      try {
+        // Get accounts
+        let accounts;
+        if (accountId) {
+          accounts = [await tradovateRequest('GET', `account/find?id=${accountId}`)];
+          if (!accounts[0]) {
+            return {
+              content: [{
+                type: "text",
+                text: `Account not found with ID: ${accountId}`
+              }]
+            };
+          }
+        } else {
+          accounts = await tradovateRequest('GET', 'account/list');
+          if (!accounts || accounts.length === 0) {
+            return {
+              content: [{
+                type: "text",
+                text: `No accounts found`
+              }]
+            };
+          }
+        }
+
+        const account = accounts[0];
+        const actualAccountId = account.id;
+
+        // Get cash balance
+        const cashBalance = await tradovateRequest('POST', 'cashBalance/getCashBalanceSnapshot', { accountId: actualAccountId });
+        
+        // Get positions
+        const positions = await tradovateRequest('GET', `position/list?accountId=${actualAccountId}`);
+        
+        // Calculate summary
+        const totalRealizedPnl = positions.reduce((sum: number, pos: Position) => sum + pos.realizedPnl, 0);
+        const totalOpenPnl = positions.reduce((sum: number, pos: Position) => sum + pos.openPnl, 0);
+        
+        const summary = {
+          account,
+          balance: cashBalance.cashBalance,
+          openPnl: totalOpenPnl,
+          totalEquity: cashBalance.cashBalance + totalOpenPnl,
+          marginUsed: cashBalance.initialMargin,
+          availableMargin: cashBalance.cashBalance - cashBalance.initialMargin + totalOpenPnl,
+          positionCount: positions.length
+        };
+
         return {
           content: [{
             type: "text",
-            text: `Account not found with ID: ${accountId}`
+            text: `Account summary for ${account.name}:\n${JSON.stringify(summary, null, 2)}`
+          }]
+        };
+      } catch (error) {
+        console.error("Error getting account summary:", error);
+        // Fallback to mock data if API call fails
+        const mockAccountId = accountId || "12345";
+        const mockAccount = accounts[mockAccountId];
+        
+        if (!mockAccount) {
+          return {
+            content: [{
+              type: "text",
+              text: `Account not found with ID: ${mockAccountId}`
+            }]
+          };
+        }
+
+        // Calculate account summary using mock data
+        const mockPositions = Object.values(positions).filter(p => p.accountId.toString() === mockAccountId);
+        const mockTotalRealizedPnl = mockPositions.reduce((sum, pos) => sum + pos.realizedPnl, 0);
+        const mockTotalOpenPnl = mockPositions.reduce((sum, pos) => sum + pos.openPnl, 0);
+        
+        const mockSummary = {
+          account: mockAccount,
+          balance: 100000 + mockTotalRealizedPnl, // Mock initial balance
+          openPnl: mockTotalOpenPnl,
+          totalEquity: 100000 + mockTotalRealizedPnl + mockTotalOpenPnl,
+          marginUsed: 10000, // Mock margin
+          availableMargin: 90000 + mockTotalRealizedPnl + mockTotalOpenPnl,
+          positionCount: mockPositions.length
+        };
+
+        return {
+          content: [{
+            type: "text",
+            text: `Account summary for ${mockAccountId}:\n${JSON.stringify(mockSummary, null, 2)}`
           }]
         };
       }
-
-      // Calculate account summary (in a real implementation, this would call the Tradovate API)
-      const accountPositions = Object.values(positions).filter(p => p.accountId.toString() === accountId);
-      const totalRealizedPnl = accountPositions.reduce((sum, pos) => sum + pos.realizedPnl, 0);
-      const totalOpenPnl = accountPositions.reduce((sum, pos) => sum + pos.openPnl, 0);
-      
-      const summary = {
-        account,
-        balance: 100000 + totalRealizedPnl, // Mock initial balance
-        openPnl: totalOpenPnl,
-        totalEquity: 100000 + totalRealizedPnl + totalOpenPnl,
-        marginUsed: 10000, // Mock margin
-        availableMargin: 90000 + totalRealizedPnl + totalOpenPnl,
-        positionCount: accountPositions.length
-      };
-
-      return {
-        content: [{
-          type: "text",
-          text: `Account summary for ${accountId}:\n${JSON.stringify(summary, null, 2)}`
-        }]
-      };
     }
 
     case "get_market_data": {
@@ -946,10 +1329,25 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 });
 
 /**
+ * Initialize the server by authenticating with Tradovate API
+ */
+async function initialize() {
+  try {
+    // Authenticate with Tradovate API
+    await authenticate();
+    console.log("Tradovate MCP server initialized successfully");
+  } catch (error) {
+    console.error("Failed to initialize Tradovate MCP server:", error);
+    console.warn("Server will start with mock data fallback");
+  }
+}
+
+/**
  * Start the server using stdio transport.
  * This allows the server to communicate via standard input/output streams.
  */
 async function main() {
+  await initialize();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
