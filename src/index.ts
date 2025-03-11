@@ -78,94 +78,226 @@ type Account = {
 };
 
 /**
- * Mock data for demonstration purposes
- * In a real implementation, this would be fetched from the Tradovate API
+ * Data storage for caching API responses
+ * This helps reduce API calls and provides fallback when API is unavailable
  */
-const contracts: { [id: string]: Contract } = {
-  "1": {
-    id: 1,
-    name: "ESZ4",
-    contractMaturityId: 12345,
-    productId: 473,
-    productType: "Future",
-    description: "E-mini S&P 500 Future December 2024",
-    status: "Active"
-  },
-  "2": {
-    id: 2,
-    name: "NQZ4",
-    contractMaturityId: 12346,
-    productId: 474,
-    productType: "Future",
-    description: "E-mini NASDAQ-100 Future December 2024",
-    status: "Active"
-  }
-};
+let contractsCache: { [id: string]: Contract } = {};
+let positionsCache: { [id: string]: Position } = {};
+let ordersCache: { [id: string]: Order } = {};
+let accountsCache: { [id: string]: Account } = {};
 
-const positions: { [id: string]: Position } = {
-  "1": {
-    id: 1,
-    accountId: 12345,
-    contractId: 1,
-    timestamp: "2024-03-10T12:00:00Z",
-    tradeDate: { year: 2024, month: 3, day: 10 },
-    netPos: 2,
-    netPrice: 5200.25,
-    realizedPnl: 0,
-    openPnl: 150.50,
-    markPrice: 5275.50
-  },
-  "2": {
-    id: 2,
-    accountId: 12345,
-    contractId: 2,
-    timestamp: "2024-03-10T12:30:00Z",
-    tradeDate: { year: 2024, month: 3, day: 10 },
-    netPos: -1,
-    netPrice: 18250.75,
-    realizedPnl: 0,
-    openPnl: -75.25,
-    markPrice: 18326.00
+/**
+ * Fetch contracts from Tradovate API
+ */
+async function fetchContracts(): Promise<{ [id: string]: Contract }> {
+  try {
+    // Get all contracts
+    const contractsList = await tradovateRequest('GET', 'contract/list');
+    
+    // Convert array to object with id as key
+    const contractsMap: { [id: string]: Contract } = {};
+    contractsList.forEach((contract: Contract) => {
+      contractsMap[contract.id.toString()] = contract;
+    });
+    
+    // Update cache
+    contractsCache = contractsMap;
+    return contractsMap;
+  } catch (error) {
+    console.error('Error fetching contracts:', error);
+    // Return cache if available, otherwise empty object
+    return contractsCache || {};
   }
-};
+}
 
-const orders: { [id: string]: Order } = {
-  "1": {
-    id: 1,
-    accountId: 12345,
-    contractId: 1,
-    timestamp: "2024-03-10T11:55:00Z",
-    action: "Buy",
-    ordStatus: "Filled",
-    orderQty: 2,
-    orderType: "Market"
-  },
-  "2": {
-    id: 2,
-    accountId: 12345,
-    contractId: 2,
-    timestamp: "2024-03-10T12:25:00Z",
-    action: "Sell",
-    ordStatus: "Filled",
-    orderQty: 1,
-    orderType: "Market"
+/**
+ * Fetch positions from Tradovate API
+ */
+async function fetchPositions(): Promise<{ [id: string]: Position }> {
+  try {
+    // Get all positions
+    const positionsList = await tradovateRequest('GET', 'position/list');
+    
+    // Convert array to object with id as key
+    const positionsMap: { [id: string]: Position } = {};
+    positionsList.forEach((position: Position) => {
+      positionsMap[position.id.toString()] = position;
+    });
+    
+    // Update cache
+    positionsCache = positionsMap;
+    return positionsMap;
+  } catch (error) {
+    console.error('Error fetching positions:', error);
+    // Return cache if available, otherwise empty object
+    return positionsCache || {};
   }
-};
+}
 
-const accounts: { [id: string]: Account } = {
-  "12345": {
-    id: 12345,
-    name: "Demo Account",
-    userId: 67890,
-    accountType: "Customer",
-    active: true,
-    clearingHouseId: 1,
-    riskCategoryId: 1,
-    autoLiqProfileId: 1,
-    marginAccountType: "Regular",
-    legalStatus: "Individual"
+/**
+ * Fetch orders from Tradovate API
+ */
+async function fetchOrders(): Promise<{ [id: string]: Order }> {
+  try {
+    // Get all orders
+    const ordersList = await tradovateRequest('GET', 'order/list');
+    
+    // Convert array to object with id as key
+    const ordersMap: { [id: string]: Order } = {};
+    ordersList.forEach((order: Order) => {
+      ordersMap[order.id.toString()] = order;
+    });
+    
+    // Update cache
+    ordersCache = ordersMap;
+    return ordersMap;
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    // Return cache if available, otherwise empty object
+    return ordersCache || {};
   }
-};
+}
+
+/**
+ * Fetch accounts from Tradovate API
+ */
+async function fetchAccounts(): Promise<{ [id: string]: Account }> {
+  try {
+    // Get all accounts
+    const accountsList = await tradovateRequest('GET', 'account/list');
+    
+    // Convert array to object with id as key
+    const accountsMap: { [id: string]: Account } = {};
+    accountsList.forEach((account: Account) => {
+      accountsMap[account.id.toString()] = account;
+    });
+    
+    // Update cache
+    accountsCache = accountsMap;
+    return accountsMap;
+  } catch (error) {
+    console.error('Error fetching accounts:', error);
+    // Return cache if available, otherwise empty object
+    return accountsCache || {};
+  }
+}
+
+/**
+ * Initialize data by fetching from API
+ */
+async function initializeData() {
+  try {
+    console.log('Initializing data from Tradovate API...');
+    
+    // Fetch all data in parallel
+    await Promise.all([
+      fetchContracts(),
+      fetchPositions(),
+      fetchOrders(),
+      fetchAccounts()
+    ]);
+    
+    console.log('Data initialization complete');
+  } catch (error) {
+    console.error('Error initializing data:', error);
+    console.warn('Using mock data as fallback');
+    
+    // Use mock data as fallback
+    if (Object.keys(contractsCache).length === 0) {
+      contractsCache = {
+        "1": {
+          id: 1,
+          name: "ESZ4",
+          contractMaturityId: 12345,
+          productId: 473,
+          productType: "Future",
+          description: "E-mini S&P 500 Future December 2024",
+          status: "Active"
+        },
+        "2": {
+          id: 2,
+          name: "NQZ4",
+          contractMaturityId: 12346,
+          productId: 474,
+          productType: "Future",
+          description: "E-mini NASDAQ-100 Future December 2024",
+          status: "Active"
+        }
+      };
+    }
+    
+    if (Object.keys(positionsCache).length === 0) {
+      positionsCache = {
+        "1": {
+          id: 1,
+          accountId: 12345,
+          contractId: 1,
+          timestamp: "2024-03-10T12:00:00Z",
+          tradeDate: { year: 2024, month: 3, day: 10 },
+          netPos: 2,
+          netPrice: 5200.25,
+          realizedPnl: 0,
+          openPnl: 150.50,
+          markPrice: 5275.50
+        },
+        "2": {
+          id: 2,
+          accountId: 12345,
+          contractId: 2,
+          timestamp: "2024-03-10T12:30:00Z",
+          tradeDate: { year: 2024, month: 3, day: 10 },
+          netPos: -1,
+          netPrice: 18250.75,
+          realizedPnl: 0,
+          openPnl: -75.25,
+          markPrice: 18326.00
+        }
+      };
+    }
+    
+    if (Object.keys(ordersCache).length === 0) {
+      ordersCache = {
+        "1": {
+          id: 1,
+          accountId: 12345,
+          contractId: 1,
+          timestamp: "2024-03-10T11:55:00Z",
+          action: "Buy",
+          ordStatus: "Filled",
+          orderQty: 2,
+          orderType: "Market"
+        },
+        "2": {
+          id: 2,
+          accountId: 12345,
+          contractId: 2,
+          timestamp: "2024-03-10T12:25:00Z",
+          action: "Sell",
+          ordStatus: "Filled",
+          orderQty: 1,
+          orderType: "Market"
+        }
+      };
+    }
+    
+    if (Object.keys(accountsCache).length === 0) {
+      accountsCache = {
+        "12345": {
+          id: 12345,
+          name: "Demo Account",
+          userId: 67890,
+          accountType: "Customer",
+          active: true,
+          clearingHouseId: 1,
+          riskCategoryId: 1,
+          autoLiqProfileId: 1,
+          marginAccountType: "Regular",
+          legalStatus: "Individual"
+        }
+      };
+    }
+  }
+}
 
 /**
  * Tradovate API configuration
@@ -393,21 +525,23 @@ const server = new Server(
  */
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
   try {
-    // Get contracts from API
-    const contractsData = await tradovateRequest('GET', 'contract/list');
-    const contractResources = contractsData.map((contract: Contract) => ({
-      uri: `tradovate://contract/${contract.id}`,
+    // Get contracts and positions from cache or API
+    const contracts = await fetchContracts();
+    const positions = await fetchPositions();
+    
+    // Create resources for contracts
+    const contractResources = Object.entries(contracts).map(([id, contract]) => ({
+      uri: `tradovate://contract/${id}`,
       mimeType: "application/json",
       name: contract.name,
       description: `${contract.description} (${contract.productType})`
     }));
 
-    // Get positions from API
-    const positionsData = await tradovateRequest('GET', 'position/list');
-    const positionResources = positionsData.map((position: Position) => {
-      const contract = contractsData.find((c: Contract) => c.id === position.contractId);
+    // Create resources for positions
+    const positionResources = Object.entries(positions).map(([id, position]) => {
+      const contract = contracts[position.contractId.toString()];
       return {
-        uri: `tradovate://position/${position.id}`,
+        uri: `tradovate://position/${id}`,
         mimeType: "application/json",
         name: `Position: ${contract?.name || position.contractId}`,
         description: `${position.netPos > 0 ? 'Long' : 'Short'} ${Math.abs(position.netPos)} @ ${position.netPrice}`
@@ -419,16 +553,16 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
     };
   } catch (error) {
     console.error("Error fetching resources:", error);
-    // Fallback to mock data if API call fails
-    const contractResources = Object.entries(contracts).map(([id, contract]) => ({
+    // Fallback to cached data
+    const contractResources = Object.entries(contractsCache).map(([id, contract]) => ({
       uri: `tradovate://contract/${id}`,
       mimeType: "application/json",
       name: contract.name,
       description: `${contract.description} (${contract.productType})`
     }));
 
-    const positionResources = Object.entries(positions).map(([id, position]) => {
-      const contract = contracts[position.contractId.toString()];
+    const positionResources = Object.entries(positionsCache).map(([id, position]) => {
+      const contract = contractsCache[position.contractId.toString()];
       return {
         uri: `tradovate://position/${id}`,
         mimeType: "application/json",
@@ -457,12 +591,15 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
     switch (resourceType) {
       case "contract":
+        // Get contract by ID
         content = await tradovateRequest('GET', `contract/find?id=${id}`);
         if (!content) {
           throw new Error(`Contract ${id} not found`);
         }
         break;
+        
       case "position":
+        // Get position by ID
         content = await tradovateRequest('GET', `position/find?id=${id}`);
         if (!content) {
           throw new Error(`Position ${id} not found`);
@@ -476,6 +613,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
           contractDescription: contract?.description || "Unknown"
         };
         break;
+        
       default:
         throw new Error(`Unknown resource type: ${resourceType}`);
     }
@@ -489,39 +627,42 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     };
   } catch (error) {
     console.error(`Error reading resource ${request.params.uri}:`, error);
-    // Fallback to mock data if API call fails
-    let content: any;
-
+    
+    // Fallback to cached data
+    let cachedContent: any;
+    
     switch (resourceType) {
       case "contract":
-        content = contracts[id];
-        if (!content) {
+        cachedContent = contractsCache[id];
+        if (!cachedContent) {
           throw new Error(`Contract ${id} not found`);
         }
         break;
+        
       case "position":
-        content = positions[id];
-        if (!content) {
+        cachedContent = positionsCache[id];
+        if (!cachedContent) {
           throw new Error(`Position ${id} not found`);
         }
         
         // Enrich position data with contract information
-        const contract = contracts[content.contractId.toString()];
-        content = {
-          ...content,
-          contractName: contract?.name || "Unknown",
-          contractDescription: contract?.description || "Unknown"
+        const cachedContract = contractsCache[cachedContent.contractId.toString()];
+        cachedContent = {
+          ...cachedContent,
+          contractName: cachedContract?.name || "Unknown",
+          contractDescription: cachedContract?.description || "Unknown"
         };
         break;
+        
       default:
         throw new Error(`Unknown resource type: ${resourceType}`);
     }
-
+    
     return {
       contents: [{
         uri: request.params.uri,
         mimeType: "application/json",
-        text: JSON.stringify(content, null, 2)
+        text: JSON.stringify(cachedContent, null, 2)
       }]
     };
   }
@@ -725,9 +866,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       } catch (error) {
         console.error(`Error getting contract details for ${symbol}:`, error);
-        // Fallback to mock data if API call fails
-        const contract = contracts[symbol];
-        if (!contract) {
+        
+        // Fallback to cached data
+        const cachedContract = Object.values(contractsCache).find(c => c.name === symbol);
+        
+        if (!cachedContract) {
           return {
             content: [{
               type: "text",
@@ -739,7 +882,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{
             type: "text",
-            text: `Contract details for ${symbol}:\n${JSON.stringify(contract, null, 2)}`
+            text: `Contract details for ${symbol} (cached):\n${JSON.stringify(cachedContract, null, 2)}`
           }]
         };
       }
@@ -784,21 +927,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       } catch (error) {
         console.error("Error listing positions:", error);
-        // Fallback to mock data if API call fails
-        const accountPositions = Object.values(positions).filter(p => p.accountId.toString() === accountId);
         
-        if (accountPositions.length === 0) {
+        // Fallback to cached data
+        let cachedPositions = Object.values(positionsCache);
+        
+        // Filter by account ID if provided
+        if (accountId) {
+          cachedPositions = cachedPositions.filter(p => p.accountId.toString() === accountId);
+        }
+        
+        if (cachedPositions.length === 0) {
           return {
             content: [{
               type: "text",
-              text: `No positions found for account ${accountId}`
+              text: `No positions found${accountId ? ` for account ${accountId}` : ''} (cached)`
             }]
           };
         }
 
         // Enrich positions with contract information
-        const enrichedPositions = accountPositions.map(position => {
-          const contract = contracts[position.contractId.toString()];
+        const enrichedPositions = cachedPositions.map(position => {
+          const contract = contractsCache[position.contractId.toString()];
           return {
             ...position,
             contractName: contract?.name || "Unknown",
@@ -809,7 +958,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{
             type: "text",
-            text: `Positions for account ${accountId}:\n${JSON.stringify(enrichedPositions, null, 2)}`
+            text: `Positions${accountId ? ` for account ${accountId}` : ''} (cached):\n${JSON.stringify(enrichedPositions, null, 2)}`
           }]
         };
       }
@@ -871,6 +1020,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Place order via API
         const newOrder = await tradovateRequest('POST', 'order/placeOrder', orderData);
 
+        // Update orders cache
+        ordersCache[newOrder.id.toString()] = newOrder;
+
         return {
           content: [{
             type: "text",
@@ -879,29 +1031,65 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       } catch (error) {
         console.error("Error placing order:", error);
-        // Fallback to mock data if API call fails
-        const newOrderId = String(Object.keys(orders).length + 1);
-        const newOrder: Order = {
-          id: parseInt(newOrderId),
-          accountId: 12345,
-          contractId: 1,
-          timestamp: new Date().toISOString(),
-          action,
-          ordStatus: "Working",
-          orderQty: quantity,
-          orderType,
-          price,
-          stopPrice
-        };
+        
+        // Fallback to cached data for simulation
+        try {
+          // Find contract by symbol
+          const cachedContract = Object.values(contractsCache).find(c => c.name === symbol);
+          
+          if (!cachedContract) {
+            return {
+              content: [{
+                type: "text",
+                text: `Contract not found for symbol: ${symbol}`
+              }]
+            };
+          }
 
-        orders[newOrderId] = newOrder;
+          // Get first account from cache
+          const cachedAccount = Object.values(accountsCache)[0];
+          if (!cachedAccount) {
+            return {
+              content: [{
+                type: "text",
+                text: `No accounts found in cache`
+              }]
+            };
+          }
 
-        return {
-          content: [{
-            type: "text",
-            text: `Order placed successfully:\n${JSON.stringify(newOrder, null, 2)}`
-          }]
-        };
+          // Create simulated order
+          const newOrderId = String(Object.keys(ordersCache).length + 1);
+          const simulatedOrder: Order = {
+            id: parseInt(newOrderId),
+            accountId: cachedAccount.id,
+            contractId: cachedContract.id,
+            timestamp: new Date().toISOString(),
+            action,
+            ordStatus: "Working",
+            orderQty: quantity,
+            orderType,
+            price,
+            stopPrice
+          };
+
+          // Add to cache
+          ordersCache[newOrderId] = simulatedOrder;
+
+          return {
+            content: [{
+              type: "text",
+              text: `Order placed successfully (simulated):\n${JSON.stringify(simulatedOrder, null, 2)}`
+            }]
+          };
+        } catch (fallbackError) {
+          console.error("Error in fallback order placement:", fallbackError);
+          return {
+            content: [{
+              type: "text",
+              text: `Failed to place order: ${error instanceof Error ? error.message : String(error)}`
+            }]
+          };
+        }
       }
     }
 
@@ -937,6 +1125,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Modify order via API
         const updatedOrder = await tradovateRequest('POST', 'order/modifyOrder', modifyData);
 
+        // Update orders cache
+        ordersCache[orderId] = updatedOrder;
+
         return {
           content: [{
             type: "text",
@@ -945,9 +1136,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       } catch (error) {
         console.error(`Error modifying order ${orderId}:`, error);
-        // Fallback to mock data if API call fails
-        const order = orders[orderId];
-        if (!order) {
+        
+        // Fallback to cached data for simulation
+        const cachedOrder = ordersCache[orderId];
+        
+        if (!cachedOrder) {
           return {
             content: [{
               type: "text",
@@ -956,15 +1149,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Update order (in a real implementation, this would call the Tradovate API)
-        if (price !== undefined) order.price = price;
-        if (stopPrice !== undefined) order.stopPrice = stopPrice;
-        if (quantity !== undefined) order.orderQty = quantity;
+        // Update order in cache
+        if (price !== undefined) cachedOrder.price = price;
+        if (stopPrice !== undefined) cachedOrder.stopPrice = stopPrice;
+        if (quantity !== undefined) cachedOrder.orderQty = quantity;
 
         return {
           content: [{
             type: "text",
-            text: `Order modified successfully:\n${JSON.stringify(order, null, 2)}`
+            text: `Order modified successfully (simulated):\n${JSON.stringify(cachedOrder, null, 2)}`
           }]
         };
       }
@@ -993,6 +1186,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Cancel order via API
         const canceledOrder = await tradovateRequest('POST', 'order/cancelOrder', { orderId: parseInt(orderId) });
 
+        // Update orders cache
+        ordersCache[orderId] = canceledOrder;
+
         return {
           content: [{
             type: "text",
@@ -1001,9 +1197,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       } catch (error) {
         console.error(`Error canceling order ${orderId}:`, error);
-        // Fallback to mock data if API call fails
-        const order = orders[orderId];
-        if (!order) {
+        
+        // Fallback to cached data for simulation
+        const cachedOrder = ordersCache[orderId];
+        
+        if (!cachedOrder) {
           return {
             content: [{
               type: "text",
@@ -1012,13 +1210,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Cancel order (in a real implementation, this would call the Tradovate API)
-        order.ordStatus = "Canceled";
+        // Update order status in cache
+        cachedOrder.ordStatus = "Canceled";
 
         return {
           content: [{
             type: "text",
-            text: `Order canceled successfully:\n${JSON.stringify(order, null, 2)}`
+            text: `Order canceled successfully (simulated):\n${JSON.stringify(cachedOrder, null, 2)}`
           }]
         };
       }
@@ -1063,6 +1261,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           contractId: position.contractId
         });
 
+        // Refresh positions cache
+        await fetchPositions();
+
         return {
           content: [{
             type: "text",
@@ -1071,13 +1272,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       } catch (error) {
         console.error(`Error liquidating position for ${symbol}:`, error);
-        // Fallback to mock data if API call fails
-        const mockPosition = Object.values(positions).find(p => {
-          const mockContract = contracts[p.contractId.toString()];
-          return mockContract && mockContract.name === symbol;
-        });
         
-        if (!mockPosition) {
+        // Fallback to cached data for simulation
+        const cachedContract = Object.values(contractsCache).find(c => c.name === symbol);
+        
+        if (!cachedContract) {
+          return {
+            content: [{
+              type: "text",
+              text: `Contract not found for symbol: ${symbol}`
+            }]
+          };
+        }
+
+        // Find position by contract ID
+        const cachedPosition = Object.values(positionsCache).find(p => p.contractId === cachedContract.id);
+        
+        if (!cachedPosition) {
           return {
             content: [{
               type: "text",
@@ -1086,31 +1297,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        // Create liquidation order using mock data
-        const mockOrderId = String(Object.keys(orders).length + 1);
-        const mockAction = mockPosition.netPos > 0 ? "Sell" : "Buy";
-        const mockOrder: Order = {
-          id: parseInt(mockOrderId),
-          accountId: mockPosition.accountId,
-          contractId: mockPosition.contractId,
+        // Create simulated liquidation order
+        const newOrderId = String(Object.keys(ordersCache).length + 1);
+        const action = cachedPosition.netPos > 0 ? "Sell" : "Buy";
+        const simulatedOrder: Order = {
+          id: parseInt(newOrderId),
+          accountId: cachedPosition.accountId,
+          contractId: cachedPosition.contractId,
           timestamp: new Date().toISOString(),
-          action: mockAction,
+          action,
           ordStatus: "Working",
-          orderQty: Math.abs(mockPosition.netPos),
+          orderQty: Math.abs(cachedPosition.netPos),
           orderType: "Market"
         };
 
-        orders[mockOrderId] = mockOrder;
+        // Add to orders cache
+        ordersCache[newOrderId] = simulatedOrder;
 
-        // Update position
-        mockPosition.netPos = 0;
-        mockPosition.realizedPnl += mockPosition.openPnl;
-        mockPosition.openPnl = 0;
+        // Update position in cache
+        const realizedPnl = cachedPosition.openPnl;
+        cachedPosition.netPos = 0;
+        cachedPosition.realizedPnl += realizedPnl;
+        cachedPosition.openPnl = 0;
 
         return {
           content: [{
             type: "text",
-            text: `Position liquidated successfully:\n${JSON.stringify(mockPosition, null, 2)}\nLiquidation order:\n${JSON.stringify(mockOrder, null, 2)}`
+            text: `Position liquidated successfully (simulated):\n${JSON.stringify(cachedPosition, null, 2)}\nLiquidation order:\n${JSON.stringify(simulatedOrder, null, 2)}`
           }]
         };
       }
@@ -1175,38 +1388,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       } catch (error) {
         console.error("Error getting account summary:", error);
-        // Fallback to mock data if API call fails
-        const mockAccountId = accountId || "12345";
-        const mockAccount = accounts[mockAccountId];
         
-        if (!mockAccount) {
-          return {
-            content: [{
-              type: "text",
-              text: `Account not found with ID: ${mockAccountId}`
-            }]
-          };
+        // Fallback to cached data for simulation
+        let cachedAccount;
+        
+        if (accountId) {
+          cachedAccount = accountsCache[accountId];
+          if (!cachedAccount) {
+            return {
+              content: [{
+                type: "text",
+                text: `Account not found with ID: ${accountId}`
+              }]
+            };
+          }
+        } else {
+          const cachedAccounts = Object.values(accountsCache);
+          if (cachedAccounts.length === 0) {
+            return {
+              content: [{
+                type: "text",
+                text: `No accounts found in cache`
+              }]
+            };
+          }
+          cachedAccount = cachedAccounts[0];
         }
 
-        // Calculate account summary using mock data
-        const mockPositions = Object.values(positions).filter(p => p.accountId.toString() === mockAccountId);
-        const mockTotalRealizedPnl = mockPositions.reduce((sum, pos) => sum + pos.realizedPnl, 0);
-        const mockTotalOpenPnl = mockPositions.reduce((sum, pos) => sum + pos.openPnl, 0);
+        // Calculate account summary using cached data
+        const cachedPositions = Object.values(positionsCache).filter(p => p.accountId === cachedAccount.id);
+        const totalRealizedPnl = cachedPositions.reduce((sum, pos) => sum + pos.realizedPnl, 0);
+        const totalOpenPnl = cachedPositions.reduce((sum, pos) => sum + pos.openPnl, 0);
         
-        const mockSummary = {
-          account: mockAccount,
-          balance: 100000 + mockTotalRealizedPnl, // Mock initial balance
-          openPnl: mockTotalOpenPnl,
-          totalEquity: 100000 + mockTotalRealizedPnl + mockTotalOpenPnl,
-          marginUsed: 10000, // Mock margin
-          availableMargin: 90000 + mockTotalRealizedPnl + mockTotalOpenPnl,
-          positionCount: mockPositions.length
+        // Create simulated cash balance
+        const simulatedBalance = 100000 + totalRealizedPnl; // Mock initial balance
+        const simulatedMargin = 10000; // Mock margin
+        
+        const summary = {
+          account: cachedAccount,
+          balance: simulatedBalance,
+          openPnl: totalOpenPnl,
+          totalEquity: simulatedBalance + totalOpenPnl,
+          marginUsed: simulatedMargin,
+          availableMargin: simulatedBalance - simulatedMargin + totalOpenPnl,
+          positionCount: cachedPositions.length
         };
 
         return {
           content: [{
             type: "text",
-            text: `Account summary for ${mockAccountId}:\n${JSON.stringify(mockSummary, null, 2)}`
+            text: `Account summary for ${cachedAccount.name} (simulated):\n${JSON.stringify(summary, null, 2)}`
           }]
         };
       }
@@ -1285,7 +1516,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       } catch (error) {
         console.error(`Error getting market data for ${symbol}:`, error);
         // Fallback to mock data if API call fails
-        const mockContract = Object.values(contracts).find(c => c.name === symbol);
+        const mockContract = Object.values(contractsCache).find(c => c.name === symbol);
         
         if (!mockContract) {
           return {
@@ -1418,11 +1649,11 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
   switch (request.params.name) {
     case "analyze_positions": {
       // Get all positions
-      const allPositions = Object.values(positions);
+      const allPositions = Object.values(positionsCache);
       
       // Enrich positions with contract information
       const enrichedPositions = allPositions.map(position => {
-        const contract = contracts[position.contractId.toString()];
+        const contract = contractsCache[position.contractId.toString()];
         return {
           ...position,
           contractName: contract?.name || "Unknown",
@@ -1466,7 +1697,7 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 
     case "market_overview": {
       // Create embedded resources for market data
-      const marketDataResources = Object.values(contracts).map(contract => {
+      const marketDataResources = Object.values(contractsCache).map(contract => {
         // Generate mock market data
         const marketData = {
           symbol: contract.name,
@@ -1526,6 +1757,18 @@ async function initialize() {
     // Authenticate with Tradovate API
     await authenticate();
     console.log("Tradovate MCP server initialized successfully");
+    
+    // Initialize data
+    await initializeData();
+    
+    // Set up periodic data refresh (every 5 minutes)
+    setInterval(async () => {
+      try {
+        await initializeData();
+      } catch (error) {
+        console.error("Error refreshing data:", error);
+      }
+    }, 5 * 60 * 1000);
   } catch (error) {
     console.error("Failed to initialize Tradovate MCP server:", error);
     console.warn("Server will start with mock data fallback");
