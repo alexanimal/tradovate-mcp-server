@@ -53,6 +53,22 @@ For development with auto-rebuild:
 npm run watch
 ```
 
+## Configuration
+
+This MCP server requires Tradovate API credentials to function. Set the following environment variables:
+
+```bash
+# Tradovate API Credentials
+export TRADOVATE_USERNAME="your_username"
+export TRADOVATE_PASSWORD="your_password"
+export TRADOVATE_APP_ID="your_app_id"
+export TRADOVATE_DEVICE_ID="your_device_id"
+export TRADOVATE_CID="your_cid"
+export TRADOVATE_SECRET="your_secret"
+```
+
+You can also create a `.env` file in the project root with these variables.
+
 ## Installation
 
 To use with Claude Desktop, add the server config:
@@ -82,21 +98,26 @@ The Inspector will provide a URL to access debugging tools in your browser.
 
 ## Tradovate API Integration
 
-This MCP server integrates with the Tradovate API to provide trading functionality. In a production environment, you would need to:
+This MCP server integrates with the Tradovate API to provide trading functionality. The server will:
 
-1. Register for a Tradovate API account at https://tradovate.com
-2. Obtain API credentials (appId, secret, etc.)
-3. Configure the server with your credentials
-
-The current implementation uses mock data for demonstration purposes, but the structure is designed to be easily extended to use the real Tradovate API endpoints.
+1. Authenticate with the Tradovate API on startup
+2. Make real API calls for all operations
+3. Fall back to mock data if API calls fail
 
 ### Key Tradovate API Endpoints Used
 
+- `/auth/accessTokenRequest` - Authenticate and get access token
 - `/contract/find` - Find contract details by symbol
+- `/contract/list` - List all contracts
 - `/position/list` - List all positions
+- `/position/find` - Find position by ID
 - `/order/placeOrder` - Place a new order
 - `/order/modifyOrder` - Modify an existing order
 - `/order/cancelOrder` - Cancel an existing order
 - `/order/liquidatePosition` - Close an existing position
 - `/account/list` - List accounts
+- `/account/find` - Find account by ID
+- `/cashBalance/getCashBalanceSnapshot` - Get account cash balance
 - `/md/getQuote` - Get market data quotes
+- `/md/getDOM` - Get depth of market data
+- `/md/getChart` - Get chart data
