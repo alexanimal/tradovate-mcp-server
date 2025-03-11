@@ -1,9 +1,8 @@
 # Tradovate MCP Server
 
 [![smithery badge](https://smithery.ai/badge/@alexanimal/tradovate-mcp-server)](https://smithery.ai/server/@alexanimal/tradovate-mcp-server)
-
-![Code Coverage](https://img.shields.io/badge/coverage-17.31%25-red)
-[![codecov](https://codecov.io/gh/YOUR_USERNAME/tradovate-mcp-server/branch/main/graph/badge.svg)](https://codecov.io/gh/YOUR_USERNAME/tradovate-mcp-server)
+[![codecov](https://codecov.io/gh/alexanimal/tradovate-mcp-server/branch/main/graph/badge.svg)](https://codecov.io/gh/alexanimal/tradovate-mcp-server)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 A Model Context Protocol (MCP) server for interacting with the Tradovate API. This server provides tools for managing contracts, positions, orders, and accounts in Tradovate.
 
@@ -139,4 +138,6 @@ The server interacts with the following Tradovate API endpoints:
 
 ## License
 
-Private
+MIT License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
