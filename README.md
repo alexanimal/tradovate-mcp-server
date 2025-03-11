@@ -13,11 +13,13 @@ This is a TypeScript-based MCP server that implements tools for managing Tradova
 ## Features
 
 ### Resources
+
 - List and access contracts via `tradovate://contract/` URIs
 - List and access positions via `tradovate://position/` URIs
 - Each resource has detailed metadata and JSON content
 
 ### Tools
+
 - **Contract Management**
   - `get_contract_details` - Get detailed information about a specific contract by symbol
   - `get_market_data` - Get market data (quotes, DOM, charts) for a specific contract
@@ -35,22 +37,26 @@ This is a TypeScript-based MCP server that implements tools for managing Tradova
   - `get_account_summary` - Get account summary information (balance, P&L, margin)
 
 ### Prompts
+
 - `analyze_positions` - Analyze current positions and provide insights
 - `market_overview` - Get an overview of the current market conditions
 
 ## Development
 
 Install dependencies:
+
 ```bash
 npm install
 ```
 
 Build the server:
+
 ```bash
 npm run build
 ```
 
 For development with auto-rebuild:
+
 ```bash
 npm run watch
 ```
