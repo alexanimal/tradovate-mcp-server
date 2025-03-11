@@ -169,10 +169,23 @@ const accounts: { [id: string]: Account } = {
 
 /**
  * Tradovate API configuration
- * In a real implementation, these would be environment variables or configuration settings
+ * Uses environment variables for all configuration settings
  */
-const TRADOVATE_API_URL = "https://demo.tradovateapi.com/v1";
+const API_ENVIRONMENT = process.env.TRADOVATE_API_ENVIRONMENT || 'demo';
+const API_URLS = {
+  demo: 'https://demo.tradovateapi.com/v1',
+  live: 'https://live.tradovateapi.com/v1',
+  md_demo: 'https://md-demo.tradovateapi.com/v1',
+  md_live: 'https://md-live.tradovateapi.com/v1'
+};
+
+const TRADOVATE_API_URL = API_URLS[API_ENVIRONMENT as keyof typeof API_URLS] || API_URLS.demo;
+const TRADOVATE_MD_API_URL = API_ENVIRONMENT.includes('live') ? API_URLS.md_live : API_URLS.md_demo;
+
+// Authentication state
 let accessToken: string | null = null;
+let accessTokenExpiry: number | null = null;
+let refreshToken: string | null = null;
 
 /**
  * Tradovate API authentication and request handling
@@ -187,49 +200,135 @@ interface TradovateCredentials {
   sec: string;
 }
 
-// Load credentials from environment variables or config file
+// Load credentials from environment variables
 const credentials: TradovateCredentials = {
-  name: process.env.TRADOVATE_USERNAME || "",
-  password: process.env.TRADOVATE_PASSWORD || "",
-  appId: process.env.TRADOVATE_APP_ID || "",
-  appVersion: "1.0.0",
-  deviceId: process.env.TRADOVATE_DEVICE_ID || "",
-  cid: process.env.TRADOVATE_CID || "",
-  sec: process.env.TRADOVATE_SECRET || ""
+  name: process.env.TRADOVATE_USERNAME || '',
+  password: process.env.TRADOVATE_PASSWORD || '',
+  appId: process.env.TRADOVATE_APP_ID || '',
+  appVersion: process.env.TRADOVATE_APP_VERSION || '1.0.0',
+  deviceId: process.env.TRADOVATE_DEVICE_ID || '',
+  cid: process.env.TRADOVATE_CID || '',
+  sec: process.env.TRADOVATE_SECRET || ''
 };
+
+/**
+ * Check if the current access token is valid
+ */
+function isAccessTokenValid(): boolean {
+  if (!accessToken || !accessTokenExpiry) return false;
+  
+  // Consider token expired 5 minutes before actual expiry
+  const currentTime = Date.now();
+  const expiryWithBuffer = accessTokenExpiry - (5 * 60 * 1000);
+  
+  return currentTime < expiryWithBuffer;
+}
+
+/**
+ * Refresh the access token using the refresh token
+ */
+async function refreshAccessToken(): Promise<string> {
+  if (!refreshToken) {
+    throw new Error('No refresh token available');
+  }
+  
+  try {
+    const response = await axios.post(`${TRADOVATE_API_URL}/auth/renewAccessToken`, { 
+      name: credentials.name,
+      refreshToken 
+    });
+    
+    if (response.data && response.data.accessToken) {
+      accessToken = response.data.accessToken;
+      
+      // Set expiry time (default to 24 hours if not provided)
+      if (response.data.expirationTime) {
+        accessTokenExpiry = response.data.expirationTime;
+      } else {
+        accessTokenExpiry = Date.now() + (24 * 60 * 60 * 1000);
+      }
+      
+      console.log('Successfully refreshed access token');
+      return response.data.accessToken;
+    } else {
+      throw new Error('Token refresh response did not contain an access token');
+    }
+  } catch (error) {
+    console.error('Failed to refresh access token:', error);
+    // Clear tokens to force a full re-authentication
+    accessToken = null;
+    accessTokenExpiry = null;
+    refreshToken = null;
+    throw new Error('Failed to refresh access token');
+  }
+}
 
 /**
  * Authenticate with Tradovate API and get access token
  */
 async function authenticate(): Promise<string> {
-  if (accessToken) return accessToken;
+  // If we have a valid token, return it
+  if (isAccessTokenValid() && accessToken) {
+    return accessToken;
+  }
   
+  // If we have a refresh token, try to use it
+  if (refreshToken) {
+    try {
+      return await refreshAccessToken();
+    } catch (error) {
+      console.warn('Failed to refresh token, will attempt full authentication');
+      // Continue with full authentication
+    }
+  }
+  
+  // Perform full authentication
   try {
+    // Validate required credentials
+    if (!credentials.name || !credentials.password || !credentials.appId || 
+        !credentials.deviceId || !credentials.cid || !credentials.sec) {
+      throw new Error('Missing required Tradovate API credentials');
+    }
+    
     const response = await axios.post(`${TRADOVATE_API_URL}/auth/accessTokenRequest`, credentials);
     
     if (response.data && response.data.accessToken) {
       accessToken = response.data.accessToken;
-      console.log("Successfully authenticated with Tradovate API");
+      
+      // Store refresh token if provided
+      if (response.data.refreshToken) {
+        refreshToken = response.data.refreshToken;
+      }
+      
+      // Set expiry time (default to 24 hours if not provided)
+      if (response.data.expirationTime) {
+        accessTokenExpiry = response.data.expirationTime;
+      } else {
+        accessTokenExpiry = Date.now() + (24 * 60 * 60 * 1000);
+      }
+      
+      console.log('Successfully authenticated with Tradovate API');
       return response.data.accessToken;
     } else {
-      throw new Error("Authentication response did not contain an access token");
+      throw new Error('Authentication response did not contain an access token');
     }
   } catch (error) {
-    console.error("Failed to authenticate with Tradovate API:", error);
-    throw new Error("Authentication with Tradovate API failed");
+    console.error('Failed to authenticate with Tradovate API:', error);
+    throw new Error('Authentication with Tradovate API failed');
   }
 }
 
 /**
  * Make an authenticated request to the Tradovate API
  */
-async function tradovateRequest(method: string, endpoint: string, data?: any): Promise<any> {
+async function tradovateRequest(method: string, endpoint: string, data?: any, isMarketData: boolean = false): Promise<any> {
   const token = await authenticate();
+  const baseUrl = isMarketData ? TRADOVATE_MD_API_URL : TRADOVATE_API_URL;
   
   try {
     const response = await axios({
       method,
-      url: `${TRADOVATE_API_URL}/${endpoint}`,
+      url: `${baseUrl}/${endpoint}`,
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
@@ -238,9 +337,36 @@ async function tradovateRequest(method: string, endpoint: string, data?: any): P
     });
     
     return response.data;
-  } catch (error) {
+  } catch (error: any) {
+    // Handle specific API errors
+    if (error.response) {
+      const status = error.response.status;
+      const errorData = error.response.data;
+      
+      // Handle authentication errors
+      if (status === 401) {
+        // Clear tokens to force re-authentication on next request
+        accessToken = null;
+        accessTokenExpiry = null;
+        
+        throw new Error('Authentication failed: ' + (errorData.errorText || 'Unauthorized'));
+      }
+      
+      // Handle rate limiting
+      if (status === 429) {
+        console.warn('Rate limit exceeded, retrying after delay');
+        // Wait for 2 seconds and retry
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return tradovateRequest(method, endpoint, data, isMarketData);
+      }
+      
+      // Handle other API errors
+      throw new Error(`Tradovate API error (${status}): ${errorData.errorText || 'Unknown error'}`);
+    }
+    
+    // Handle network errors
     console.error(`Error making request to ${endpoint}:`, error);
-    throw new Error(`Tradovate API request to ${endpoint} failed`);
+    throw new Error(`Tradovate API request to ${endpoint} failed: ${error.message}`);
   }
 }
 
@@ -1095,105 +1221,169 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error("Symbol and dataType are required");
       }
 
-      // Find contract by symbol
-      const contract = Object.values(contracts).find(c => c.name === symbol);
-      if (!contract) {
+      try {
+        // Find contract by symbol
+        const contract = await tradovateRequest('GET', `contract/find?name=${symbol}`);
+        
+        if (!contract) {
+          return {
+            content: [{
+              type: "text",
+              text: `Contract not found for symbol: ${symbol}`
+            }]
+          };
+        }
+
+        let marketData: any;
+        
+        switch (dataType) {
+          case "Quote":
+            // Get quote data using market data API
+            marketData = await tradovateRequest('GET', `md/getQuote?contractId=${contract.id}`, undefined, true);
+            break;
+          
+          case "DOM":
+            // Get DOM data using market data API
+            marketData = await tradovateRequest('GET', `md/getDOM?contractId=${contract.id}`, undefined, true);
+            break;
+          
+          case "Chart":
+            // Convert timeframe to chart parameters
+            let chartUnits;
+            let chartLength;
+            
+            switch (chartTimeframe) {
+              case "1min": chartUnits = "m"; chartLength = 1; break;
+              case "5min": chartUnits = "m"; chartLength = 5; break;
+              case "15min": chartUnits = "m"; chartLength = 15; break;
+              case "30min": chartUnits = "m"; chartLength = 30; break;
+              case "1hour": chartUnits = "h"; chartLength = 1; break;
+              case "4hour": chartUnits = "h"; chartLength = 4; break;
+              case "1day": chartUnits = "d"; chartLength = 1; break;
+              default: chartUnits = "m"; chartLength = 1;
+            }
+            
+            // Get chart data using market data API
+            marketData = await tradovateRequest(
+              'GET', 
+              `md/getChart?contractId=${contract.id}&chartDescription=${chartLength}${chartUnits}&timeRange=3600`, 
+              undefined, 
+              true
+            );
+            break;
+          
+          default:
+            throw new Error(`Unsupported data type: ${dataType}`);
+        }
+
         return {
           content: [{
             type: "text",
-            text: `Contract not found for symbol: ${symbol}`
+            text: `Market data for ${symbol} (${dataType}):\n${JSON.stringify(marketData, null, 2)}`
+          }]
+        };
+      } catch (error) {
+        console.error(`Error getting market data for ${symbol}:`, error);
+        // Fallback to mock data if API call fails
+        const mockContract = Object.values(contracts).find(c => c.name === symbol);
+        
+        if (!mockContract) {
+          return {
+            content: [{
+              type: "text",
+              text: `Contract not found for symbol: ${symbol}`
+            }]
+          };
+        }
+
+        let mockMarketData: any;
+        
+        switch (dataType) {
+          case "Quote":
+            mockMarketData = {
+              symbol,
+              bid: 5275.25,
+              ask: 5275.50,
+              last: 5275.25,
+              volume: 1250000,
+              timestamp: new Date().toISOString()
+            };
+            break;
+          
+          case "DOM":
+            mockMarketData = {
+              symbol,
+              bids: [
+                { price: 5275.25, size: 250 },
+                { price: 5275.00, size: 175 },
+                { price: 5274.75, size: 320 },
+                { price: 5274.50, size: 450 },
+                { price: 5274.25, size: 280 }
+              ],
+              asks: [
+                { price: 5275.50, size: 180 },
+                { price: 5275.75, size: 220 },
+                { price: 5276.00, size: 350 },
+                { price: 5276.25, size: 275 },
+                { price: 5276.50, size: 400 }
+              ],
+              timestamp: new Date().toISOString()
+            };
+            break;
+          
+          case "Chart":
+            // Generate mock chart data for the requested timeframe
+            const now = new Date();
+            const bars = [];
+            
+            for (let i = 0; i < 10; i++) {
+              const barTime = new Date(now);
+              
+              switch (chartTimeframe) {
+                case "1min": barTime.setMinutes(now.getMinutes() - i); break;
+                case "5min": barTime.setMinutes(now.getMinutes() - i * 5); break;
+                case "15min": barTime.setMinutes(now.getMinutes() - i * 15); break;
+                case "30min": barTime.setMinutes(now.getMinutes() - i * 30); break;
+                case "1hour": barTime.setHours(now.getHours() - i); break;
+                case "4hour": barTime.setHours(now.getHours() - i * 4); break;
+                case "1day": barTime.setDate(now.getDate() - i); break;
+              }
+              
+              const basePrice = 5275.00;
+              const open = basePrice - i * 0.25;
+              const high = open + Math.random() * 1.5;
+              const low = open - Math.random() * 1.5;
+              const close = (open + high + low) / 3;
+              const volume = Math.floor(Math.random() * 10000) + 5000;
+              
+              bars.push({
+                timestamp: barTime.toISOString(),
+                open,
+                high,
+                low,
+                close,
+                volume
+              });
+            }
+            
+            mockMarketData = {
+              symbol,
+              timeframe: chartTimeframe,
+              bars: bars.reverse()
+            };
+            break;
+          
+          default:
+            throw new Error(`Unsupported data type: ${dataType}`);
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: `Market data for ${symbol} (${dataType}) [MOCK DATA]:\n${JSON.stringify(mockMarketData, null, 2)}`
           }]
         };
       }
-
-      // Generate mock market data based on data type
-      let marketData: any;
-      
-      switch (dataType) {
-        case "Quote":
-          marketData = {
-            symbol,
-            bid: 5275.25,
-            ask: 5275.50,
-            last: 5275.25,
-            volume: 1250000,
-            timestamp: new Date().toISOString()
-          };
-          break;
-        
-        case "DOM":
-          marketData = {
-            symbol,
-            bids: [
-              { price: 5275.25, size: 250 },
-              { price: 5275.00, size: 175 },
-              { price: 5274.75, size: 320 },
-              { price: 5274.50, size: 450 },
-              { price: 5274.25, size: 280 }
-            ],
-            asks: [
-              { price: 5275.50, size: 180 },
-              { price: 5275.75, size: 220 },
-              { price: 5276.00, size: 350 },
-              { price: 5276.25, size: 275 },
-              { price: 5276.50, size: 400 }
-            ],
-            timestamp: new Date().toISOString()
-          };
-          break;
-        
-        case "Chart":
-          // Generate mock chart data for the requested timeframe
-          const now = new Date();
-          const bars = [];
-          
-          for (let i = 0; i < 10; i++) {
-            const barTime = new Date(now);
-            
-            switch (chartTimeframe) {
-              case "1min": barTime.setMinutes(now.getMinutes() - i); break;
-              case "5min": barTime.setMinutes(now.getMinutes() - i * 5); break;
-              case "15min": barTime.setMinutes(now.getMinutes() - i * 15); break;
-              case "30min": barTime.setMinutes(now.getMinutes() - i * 30); break;
-              case "1hour": barTime.setHours(now.getHours() - i); break;
-              case "4hour": barTime.setHours(now.getHours() - i * 4); break;
-              case "1day": barTime.setDate(now.getDate() - i); break;
-            }
-            
-            const basePrice = 5275.00;
-            const open = basePrice - i * 0.25;
-            const high = open + Math.random() * 1.5;
-            const low = open - Math.random() * 1.5;
-            const close = (open + high + low) / 3;
-            const volume = Math.floor(Math.random() * 10000) + 5000;
-            
-            bars.push({
-              timestamp: barTime.toISOString(),
-              open,
-              high,
-              low,
-              close,
-              volume
-            });
-          }
-          
-          marketData = {
-            symbol,
-            timeframe: chartTimeframe,
-            bars: bars.reverse()
-          };
-          break;
-        
-        default:
-          throw new Error(`Unsupported data type: ${dataType}`);
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text: `Market data for ${symbol} (${dataType}):\n${JSON.stringify(marketData, null, 2)}`
-        }]
-      };
     }
 
     default:
