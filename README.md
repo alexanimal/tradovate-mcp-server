@@ -1,5 +1,7 @@
 # Tradovate MCP Server
 
+[![smithery badge](https://smithery.ai/badge/@alexanimal/tradovate-mcp-server)](https://smithery.ai/server/@alexanimal/tradovate-mcp-server)
+
 A Model Context Protocol (MCP) server for interacting with the Tradovate API. This server provides tools for managing contracts, positions, orders, and accounts in Tradovate.
 
 ## Features
