@@ -2,8 +2,7 @@
 
 [![smithery badge](https://smithery.ai/badge/@alexanimal/tradovate-mcp-server)](https://smithery.ai/server/@alexanimal/tradovate-mcp-server)
 
-![Code Coverage](https://img.shields.io/badge/coverage-17.31%25-red)
-[![codecov](https://codecov.io/gh/YOUR_USERNAME/tradovate-mcp-server/branch/main/graph/badge.svg)](https://codecov.io/gh/YOUR_USERNAME/tradovate-mcp-server)
+[![codecov](https://codecov.io/gh/alexanimal/tradovate-mcp-server/branch/main/graph/badge.svg)](https://codecov.io/gh/alexanimal/tradovate-mcp-server)
 
 A Model Context Protocol (MCP) server for interacting with the Tradovate API. This server provides tools for managing contracts, positions, orders, and accounts in Tradovate.
 
