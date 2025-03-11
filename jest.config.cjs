@@ -15,11 +15,16 @@ module.exports = {
     'node_modules/(?!(@modelcontextprotocol)/)'
   ],
   extensionsToTreatAsEsm: ['.ts'],
-  testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
+  testMatch: ['**/__tests__/**/*.ts', '**/__tests__/**/*.js', '**/?(*.)+(spec|test).ts', '**/?(*.)+(spec|test).js'],
   roots: ['<rootDir>/src', '<rootDir>/tests'],
+  collectCoverage: false,
+  coverageDirectory: './coverage',
+  coverageReporters: ['json', 'lcov', 'text', 'clover', 'json-summary'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',
+    '!**/node_modules/**',
+    '!**/vendor/**'
   ],
   coverageThreshold: {
     global: {
@@ -30,4 +35,9 @@ module.exports = {
     },
   },
   setupFilesAfterEnv: ['<rootDir>/jest.setup.cjs'],
+  verbose: true,
+  testTimeout: 30000,
+  logHeapUsage: true,
+  detectLeaks: false,
+  detectOpenHandles: false,
 }; 
