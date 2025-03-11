@@ -60,16 +60,29 @@ npm run watch
 This MCP server requires Tradovate API credentials to function. Set the following environment variables:
 
 ```bash
+# API Environment (demo or live)
+export TRADOVATE_API_ENVIRONMENT="demo"
+
 # Tradovate API Credentials
 export TRADOVATE_USERNAME="your_username"
 export TRADOVATE_PASSWORD="your_password"
 export TRADOVATE_APP_ID="your_app_id"
+export TRADOVATE_APP_VERSION="1.0.0"
 export TRADOVATE_DEVICE_ID="your_device_id"
 export TRADOVATE_CID="your_cid"
 export TRADOVATE_SECRET="your_secret"
 ```
 
-You can also create a `.env` file in the project root with these variables.
+You can also create a `.env` file in the project root with these variables. A sample `.env.example` file is provided for reference.
+
+### API Environments
+
+The server supports multiple Tradovate API environments:
+
+- `demo` - Demo trading environment (default)
+- `live` - Live trading environment (use with caution)
+
+Market data endpoints are automatically selected based on the environment.
 
 ## Installation
 
@@ -111,12 +124,24 @@ The Inspector will provide a URL to access debugging tools in your browser.
 This MCP server integrates with the Tradovate API to provide trading functionality. The server will:
 
 1. Authenticate with the Tradovate API on startup
-2. Make real API calls for all operations
-3. Fall back to mock data if API calls fail
+2. Automatically refresh tokens when they expire
+3. Handle API errors and rate limiting
+4. Fall back to mock data if API calls fail
+
+### Authentication System
+
+The server implements a robust authentication system that:
+
+- Stores and manages access tokens and refresh tokens
+- Tracks token expiration times
+- Automatically refreshes tokens before they expire
+- Falls back to full authentication when refresh fails
+- Handles authentication errors gracefully
 
 ### Key Tradovate API Endpoints Used
 
 - `/auth/accessTokenRequest` - Authenticate and get access token
+- `/auth/renewAccessToken` - Refresh an expired access token
 - `/contract/find` - Find contract details by symbol
 - `/contract/list` - List all contracts
 - `/position/list` - List all positions
