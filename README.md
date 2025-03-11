@@ -1,5 +1,7 @@
 # tradovate-mcp-server MCP Server
 
+[![smithery badge](https://smithery.ai/badge/@alexanimal/tradovate-mcp-server)](https://smithery.ai/server/@alexanimal/tradovate-mcp-server)
+
 An MCP Server for Tradovate Tools
 
 This is a TypeScript-based MCP server that implements tools for managing Tradovate Contract and Order Positions. It demonstrates core MCP concepts by providing:
@@ -70,6 +72,14 @@ export TRADOVATE_SECRET="your_secret"
 You can also create a `.env` file in the project root with these variables.
 
 ## Installation
+
+### Installing via Smithery
+
+To install tradovate-mcp-server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@alexanimal/tradovate-mcp-server):
+
+```bash
+npx -y @smithery/cli install @alexanimal/tradovate-mcp-server --client claude
+```
 
 To use with Claude Desktop, add the server config:
 
