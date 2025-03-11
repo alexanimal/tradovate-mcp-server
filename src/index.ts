@@ -428,7 +428,9 @@ export async function main() {
 }
 
 // Only run main if this file is executed directly
-if (require.main === module) {
+// In ES Modules, we use import.meta.url to check if this file is being run directly
+const isMainModule = import.meta.url.endsWith(process.argv[1].replace(/^file:\/\//, ''));
+if (isMainModule) {
   main().catch((error) => {
     console.error("Server error:", error);
     process.exit(1);
