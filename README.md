@@ -1,164 +1,119 @@
-# tradovate-mcp-server MCP Server
+# Tradovate MCP Server
 
-[![smithery badge](https://smithery.ai/badge/@alexanimal/tradovate-mcp-server)](https://smithery.ai/server/@alexanimal/tradovate-mcp-server)
-
-An MCP Server for Tradovate Tools
-
-This is a TypeScript-based MCP server that implements tools for managing Tradovate Contract and Order Positions. It demonstrates core MCP concepts by providing:
-
-- Resources representing contracts and positions with URIs and metadata
-- Tools for managing positions, orders, and retrieving market data
-- Prompts for analyzing trading data and market conditions
+A Model Context Protocol (MCP) server for interacting with the Tradovate API. This server provides tools for managing contracts, positions, orders, and accounts in Tradovate.
 
 ## Features
 
-### Resources
+- Authentication with Tradovate API
+- Real-time data fetching with caching
+- Tools for contract details, position management, order placement, and more
+- Fallback to simulated data when API is unavailable
 
-- List and access contracts via `tradovate://contract/` URIs
-- List and access positions via `tradovate://position/` URIs
-- Each resource has detailed metadata and JSON content
+## Installation
 
-### Tools
-
-- **Contract Management**
-  - `get_contract_details` - Get detailed information about a specific contract by symbol
-  - `get_market_data` - Get market data (quotes, DOM, charts) for a specific contract
-
-- **Position Management**
-  - `list_positions` - List all positions for an account
-  - `liquidate_position` - Close an existing position for a specific symbol
-
-- **Order Management**
-  - `place_order` - Place a new order (market, limit, stop, stop-limit)
-  - `modify_order` - Modify an existing order (price, quantity, stop price)
-  - `cancel_order` - Cancel an existing order
-
-- **Account Information**
-  - `get_account_summary` - Get account summary information (balance, P&L, margin)
-
-### Prompts
-
-- `analyze_positions` - Analyze current positions and provide insights
-- `market_overview` - Get an overview of the current market conditions
-
-## Development
-
-Install dependencies:
+1. Clone the repository
+2. Install dependencies:
 
 ```bash
 npm install
 ```
 
-Build the server:
+3. Create a `.env` file with your Tradovate credentials:
+
+```
+TRADOVATE_API_ENVIRONMENT=demo
+TRADOVATE_USERNAME=your_username
+TRADOVATE_PASSWORD=your_password
+TRADOVATE_APP_ID=Sample App
+TRADOVATE_APP_VERSION=1.0
+TRADOVATE_CID=your_cid
+TRADOVATE_SEC=your_sec
+```
+
+## Running the Server
+
+Start the server:
 
 ```bash
-npm run build
+npm start
 ```
 
-For development with auto-rebuild:
+## Development
+
+### Project Structure
+
+- `src/index.ts` - Main server entry point
+- `src/auth.ts` - Authentication functions
+- `src/data.ts` - Data fetching and caching
+- `src/tools.ts` - Tool handlers for MCP
+- `src/types.ts` - TypeScript type definitions
+- `tests/` - Test files
+
+### Testing
+
+Run the tests:
 
 ```bash
-npm run watch
+npm test
 ```
 
-## Configuration
-
-This MCP server requires Tradovate API credentials to function. Set the following environment variables:
+Run tests with coverage:
 
 ```bash
-# API Environment (demo or live)
-export TRADOVATE_API_ENVIRONMENT="demo"
-
-# Tradovate API Credentials
-export TRADOVATE_USERNAME="your_username"
-export TRADOVATE_PASSWORD="your_password"
-export TRADOVATE_APP_ID="your_app_id"
-export TRADOVATE_APP_VERSION="1.0.0"
-export TRADOVATE_DEVICE_ID="your_device_id"
-export TRADOVATE_CID="your_cid"
-export TRADOVATE_SECRET="your_secret"
+npm run test:coverage
 ```
 
-You can also create a `.env` file in the project root with these variables. A sample `.env.example` file is provided for reference.
-
-### API Environments
-
-The server supports multiple Tradovate API environments:
-
-- `demo` - Demo trading environment (default)
-- `live` - Live trading environment (use with caution)
-
-Market data endpoints are automatically selected based on the environment.
-
-## Installation
-
-### Installing via Smithery
-
-To install tradovate-mcp-server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@alexanimal/tradovate-mcp-server):
+Run tests in watch mode:
 
 ```bash
-npx -y @smithery/cli install @alexanimal/tradovate-mcp-server --client claude
+npm run test:watch
 ```
 
-To use with Claude Desktop, add the server config:
+## Available Tools
 
-On MacOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-On Windows: `%APPDATA%/Claude/claude_desktop_config.json`
+The server provides the following tools:
 
-```json
-{
-  "mcpServers": {
-    "tradovate-mcp-server": {
-      "command": "/path/to/tradovate-mcp-server/build/index.js"
-    }
-  }
-}
-```
+1. `get_contract_details` - Get details for a specific contract by symbol
+2. `list_positions` - List positions for an account
+3. `place_order` - Place a new order
+4. `modify_order` - Modify an existing order
+5. `cancel_order` - Cancel an existing order
+6. `liquidate_position` - Liquidate a position
+7. `get_account_summary` - Get account summary information
+8. `get_market_data` - Get market data (quotes, DOM, charts)
 
-### Debugging
+## API Endpoints
 
-Since MCP servers communicate over stdio, debugging can be challenging. We recommend using the [MCP Inspector](https://github.com/modelcontextprotocol/inspector), which is available as a package script:
+The server interacts with the following Tradovate API endpoints:
 
-```bash
-npm run inspector
-```
+### Authentication
+- `/auth/accessTokenRequest` - Get access token
+- `/auth/renewAccessToken` - Renew access token
 
-The Inspector will provide a URL to access debugging tools in your browser.
-
-## Tradovate API Integration
-
-This MCP server integrates with the Tradovate API to provide trading functionality. The server will:
-
-1. Authenticate with the Tradovate API on startup
-2. Automatically refresh tokens when they expire
-3. Handle API errors and rate limiting
-4. Fall back to mock data if API calls fail
-
-### Authentication System
-
-The server implements a robust authentication system that:
-
-- Stores and manages access tokens and refresh tokens
-- Tracks token expiration times
-- Automatically refreshes tokens before they expire
-- Falls back to full authentication when refresh fails
-- Handles authentication errors gracefully
-
-### Key Tradovate API Endpoints Used
-
-- `/auth/accessTokenRequest` - Authenticate and get access token
-- `/auth/renewAccessToken` - Refresh an expired access token
-- `/contract/find` - Find contract details by symbol
+### Contracts
 - `/contract/list` - List all contracts
+- `/contract/find` - Find a specific contract
+
+### Positions
 - `/position/list` - List all positions
-- `/position/find` - Find position by ID
+
+### Orders
+- `/order/list` - List all orders
 - `/order/placeOrder` - Place a new order
 - `/order/modifyOrder` - Modify an existing order
 - `/order/cancelOrder` - Cancel an existing order
-- `/order/liquidatePosition` - Close an existing position
-- `/account/list` - List accounts
-- `/account/find` - Find account by ID
-- `/cashBalance/getCashBalanceSnapshot` - Get account cash balance
-- `/md/getQuote` - Get market data quotes
+- `/order/liquidatePosition` - Liquidate a position
+
+### Accounts
+- `/account/list` - List all accounts
+- `/account/find` - Find a specific account
+- `/cashBalance/getCashBalanceSnapshot` - Get cash balance for an account
+
+### Market Data
+- `/md/getQuote` - Get quote data
 - `/md/getDOM` - Get depth of market data
 - `/md/getChart` - Get chart data
+
+## License
+
+MIT
