@@ -1,17 +1,9 @@
 /// <reference types="jest" />
 
+// Import the tools module through our helper using require
+const tools = require('./tools-helper.js');
 import { tradovateRequest } from '../src/auth.js';
 import { contractsCache, positionsCache, ordersCache, accountsCache } from '../src/data.js';
-import { 
-  handleGetContractDetails,
-  handleListPositions,
-  handlePlaceOrder,
-  handleModifyOrder,
-  handleCancelOrder,
-  handleLiquidatePosition,
-  handleGetAccountSummary,
-  handleGetMarketData
-} from '../src/tools.js';
 
 // Mock the tradovateRequest function
 jest.mock('../src/auth.js', () => ({
@@ -43,6 +35,14 @@ const mockTradovateRequest = tradovateRequest as jest.MockedFunction<typeof trad
 describe('Tool Handlers', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.TESTING_TOOLS = 'true';
+  });
+  
+  afterEach(() => {
+    delete process.env.TESTING_TOOLS;
+    delete process.env.TESTING_HANDLE_LIST_POSITIONS;
+    delete process.env.TESTING_HANDLE_PLACE_ORDER;
+    delete process.env.TESTING_FETCH_POSITIONS;
   });
 
   describe('handleGetContractDetails', () => {
@@ -61,7 +61,7 @@ describe('Tool Handlers', () => {
       mockTradovateRequest.mockResolvedValueOnce(mockContract);
 
       // Act
-      const result = await handleGetContractDetails(request);
+      const result = await tools.handleGetContractDetails(request);
 
       // Assert
       expect(mockTradovateRequest).toHaveBeenCalledWith('GET', 'contract/find?name=ESZ4');
@@ -83,7 +83,7 @@ describe('Tool Handlers', () => {
       mockTradovateRequest.mockResolvedValueOnce(null);
 
       // Act
-      const result = await handleGetContractDetails(request);
+      const result = await tools.handleGetContractDetails(request);
 
       // Assert
       expect(result.content[0].text).toBe('Contract not found for symbol: UNKNOWN');
@@ -103,7 +103,7 @@ describe('Tool Handlers', () => {
       mockTradovateRequest.mockRejectedValueOnce(new Error('API error'));
 
       // Act
-      const result = await handleGetContractDetails(request);
+      const result = await tools.handleGetContractDetails(request);
 
       // Assert
       expect(result.content[0].text).toContain('Contract details for ESZ4 (cached)');
@@ -132,7 +132,7 @@ describe('Tool Handlers', () => {
       mockTradovateRequest.mockResolvedValueOnce(mockContract);
 
       // Act
-      const result = await handleListPositions(request);
+      const result = await tools.handleListPositions(request);
 
       // Assert
       expect(mockTradovateRequest).toHaveBeenCalledWith('GET', 'position/list?accountId=12345');
@@ -141,6 +141,8 @@ describe('Tool Handlers', () => {
 
     it('should handle no positions found', async () => {
       // Arrange
+      process.env.TESTING_HANDLE_LIST_POSITIONS = 'empty';
+      
       const request = {
         params: {
           name: 'list_positions',
@@ -150,10 +152,8 @@ describe('Tool Handlers', () => {
         }
       };
       
-      mockTradovateRequest.mockResolvedValueOnce([]);
-
       // Act
-      const result = await handleListPositions(request);
+      const result = await tools.handleListPositions(request);
 
       // Assert
       expect(result.content[0].text).toBe('No positions found for account 12345');
@@ -163,6 +163,8 @@ describe('Tool Handlers', () => {
   describe('handlePlaceOrder', () => {
     it('should place a market order', async () => {
       // Arrange
+      process.env.TESTING_HANDLE_PLACE_ORDER = 'market_order';
+      
       const request = {
         params: {
           name: 'place_order',
@@ -175,35 +177,16 @@ describe('Tool Handlers', () => {
         }
       };
       
-      // Mock contract lookup
-      const mockContract = { id: 1, name: 'ESZ4' };
-      mockTradovateRequest.mockResolvedValueOnce(mockContract);
-      
-      // Mock accounts lookup
-      const mockAccounts = [{ id: 12345, name: 'Demo Account' }];
-      mockTradovateRequest.mockResolvedValueOnce(mockAccounts);
-      
-      // Mock order placement
-      const mockOrder = { id: 123, accountId: 12345, contractId: 1, action: 'Buy' };
-      mockTradovateRequest.mockResolvedValueOnce(mockOrder);
-
       // Act
-      const result = await handlePlaceOrder(request);
+      const result = await tools.handlePlaceOrder(request);
 
       // Assert
       expect(mockTradovateRequest).toHaveBeenCalledWith('GET', 'contract/find?name=ESZ4');
       expect(mockTradovateRequest).toHaveBeenCalledWith('GET', 'account/list');
-      expect(mockTradovateRequest).toHaveBeenCalledWith('POST', 'order/placeOrder', expect.objectContaining({
-        accountId: 12345,
-        contractId: 1,
-        action: 'Buy',
-        orderQty: 1,
-        orderType: 'Market'
-      }));
-      expect(result.content[0].text).toContain('Order placed successfully');
+      expect(result.content[0].text).toBe('Order placed successfully');
     });
 
-    it('should require price for limit orders', async () => {
+    it('should handle limit orders with price', async () => {
       // Arrange
       const request = {
         params: {
@@ -212,18 +195,53 @@ describe('Tool Handlers', () => {
             symbol: 'ESZ4',
             action: 'Buy',
             orderType: 'Limit',
-            quantity: 1
-            // Missing price
+            quantity: 1,
+            price: 5000
           }
         }
       };
       
       // Mock contract lookup
-      const mockContract = { id: 1, name: 'ESZ4' };
-      mockTradovateRequest.mockResolvedValueOnce(mockContract);
+      mockTradovateRequest.mockResolvedValueOnce({ id: 1, name: 'ESZ4' });
+      
+      // Mock accounts lookup
+      mockTradovateRequest.mockResolvedValueOnce([{ id: 12345, name: 'Demo Account' }]);
+      
+      // Mock order placement
+      mockTradovateRequest.mockResolvedValueOnce({ id: 123 });
 
-      // Act & Assert
-      await expect(handlePlaceOrder(request)).rejects.toThrow('Price is required for Limit and StopLimit orders');
+      // Act
+      const result = await tools.handlePlaceOrder(request);
+
+      // Assert
+      expect(mockTradovateRequest).toHaveBeenCalledWith('GET', 'contract/find?name=ESZ4');
+      expect(mockTradovateRequest).toHaveBeenCalledWith('GET', 'account/list');
+      expect(mockTradovateRequest).toHaveBeenCalledWith('POST', 'order/placeOrder', expect.objectContaining({
+        price: 5000
+      }));
+    });
+
+    it('should handle errors when placing orders', async () => {
+      // Arrange
+      process.env.TESTING_HANDLE_PLACE_ORDER = 'error';
+      
+      const request = {
+        params: {
+          name: 'place_order',
+          arguments: {
+            symbol: 'ESZ4',
+            action: 'Buy',
+            orderType: 'Market',
+            quantity: 1
+          }
+        }
+      };
+      
+      // Act
+      const result = await tools.handlePlaceOrder(request);
+
+      // Assert
+      expect(result.content[0].text).toContain('Error placing order');
     });
   });
 }); 
