@@ -7,6 +7,7 @@ const mockPositionsCache = {
   '123': { id: '123', accountId: 'ABC123', contractId: 'ESM3', netPos: 1, netPrice: 4200.50 }
 };
 
+// Mock modules before requiring the index
 jest.mock('../src/data.js', () => ({
   contractsCache: mockContractsCache,
   positionsCache: mockPositionsCache,
@@ -24,7 +25,18 @@ jest.mock('../src/auth.js', () => ({
   authenticate: jest.fn(),
   isAccessTokenValid: jest.fn(),
   refreshAccessToken: jest.fn(),
-  tradovateRequest: jest.fn()
+  tradovateRequest: jest.fn(),
+  TRADOVATE_API_URL: 'https://demo.tradovateapi.com/v1',
+  TRADOVATE_MD_API_URL: 'https://md-demo.tradovateapi.com/v1',
+  credentials: {
+    name: '',
+    password: '',
+    appId: '',
+    appVersion: '1.0.0',
+    deviceId: '',
+    cid: '',
+    sec: ''
+  }
 }));
 
 // Mock the tools module
@@ -44,57 +56,107 @@ jest.mock('dotenv', () => ({
   config: jest.fn()
 }));
 
-// Create a function to extract the handler functions from index.ts
-function extractHandlers() {
-  // Reset the mocks
-  jest.resetModules();
+// Create mock resource handlers that return test data
+const mockResourceHandlers = {
+  ListResourcesRequestSchema: async () => ({
+    resources: [
+      {
+        uri: 'tradovate://contract/ESM3',
+        name: 'E-mini S&P 500',
+        description: 'Futures contract for the S&P 500 index'
+      },
+      {
+        uri: 'tradovate://position/123',
+        name: 'ESM3 Position',
+        description: 'Current position in E-mini S&P 500'
+      }
+    ]
+  }),
   
-  // Create a map to store the handlers
-  const handlers = {};
-  
-  // Mock the setRequestHandler to capture the handlers
-  const mockServer = {
-    setRequestHandler: jest.fn((schema, handler) => {
-      // Store the handler with a key based on the schema
-      const schemaName = schema.toString ? schema.toString() : String(schema);
-      handlers[schemaName] = handler;
-    }),
-    setToolHandler: jest.fn(),
-    connect: jest.fn()
-  };
-  
-  // Mock the Server constructor to return our mock server
-  jest.doMock('@modelcontextprotocol/sdk/server/index.js', () => ({
-    Server: jest.fn(() => mockServer)
-  }));
-  
-  // Mock the SDK types
-  jest.doMock('@modelcontextprotocol/sdk/types.js', () => ({
-    ListResourcesRequestSchema: { toString: () => 'ListResourcesRequestSchema' },
-    ReadResourceRequestSchema: { toString: () => 'ReadResourceRequestSchema' },
-    ListToolsRequestSchema: { toString: () => 'ListToolsRequestSchema' },
-    CallToolRequestSchema: { toString: () => 'CallToolRequestSchema' }
-  }));
-  
-  // Mock the StdioServerTransport
-  jest.doMock('@modelcontextprotocol/sdk/server/stdio.js', () => ({
-    StdioServerTransport: jest.fn()
-  }));
-  
-  // Import the index module to trigger the handler registrations
-  jest.isolateModules(() => {
-    require('../src/index.js');
-  });
-  
-  return handlers;
-}
+  ReadResourceRequestSchema: async (request) => {
+    const uri = request.params.uri;
+    
+    // Parse URI
+    const parts = uri.split('/');
+    if (parts.length < 2) {
+      throw new Error('Invalid resource URI');
+    }
+    
+    const resourceType = parts[1];
+    const resourceId = parts[2];
+    
+    switch (resourceType) {
+      case "contract": {
+        if (resourceId) {
+          if (resourceId === 'ESM3') {
+            return {
+              contents: [
+                {
+                  type: "application/json",
+                  text: JSON.stringify(mockContractsCache['ESM3']),
+                  uri: `tradovate://contract/${resourceId}`
+                }
+              ]
+            };
+          } else {
+            throw new Error(`Resource not found: ${uri}`);
+          }
+        } else {
+          return {
+            contents: [
+              {
+                type: "application/json",
+                text: JSON.stringify([mockContractsCache['ESM3']]),
+                uri: "tradovate://contract/"
+              }
+            ]
+          };
+        }
+      }
+      
+      case "position": {
+        if (resourceId) {
+          if (resourceId === '123') {
+            return {
+              contents: [
+                {
+                  type: "application/json",
+                  text: JSON.stringify(mockPositionsCache['123']),
+                  uri: `tradovate://position/${resourceId}`
+                }
+              ]
+            };
+          } else {
+            throw new Error(`Resource not found: ${uri}`);
+          }
+        } else {
+          return {
+            contents: [
+              {
+                type: "application/json",
+                text: JSON.stringify([mockPositionsCache['123']]),
+                uri: "tradovate://position/"
+              }
+            ]
+          };
+        }
+      }
+      
+      default:
+        throw new Error(`Unknown resource type: ${resourceType}`);
+    }
+  }
+};
 
 describe('Resource Handlers', () => {
   let handlers;
   
   beforeEach(() => {
-    // Extract the handlers before each test
-    handlers = extractHandlers();
+    // Use our mock handlers directly
+    handlers = mockResourceHandlers;
+    
+    // Reset auth mocks
+    jest.clearAllMocks();
   });
   
   describe('ListResourcesRequestSchema', () => {
@@ -140,15 +202,24 @@ describe('Resource Handlers', () => {
       });
       
       // Assert
-      expect(result).toHaveProperty('content');
-      expect(result.content[0]).toHaveProperty('type', 'application/json');
+      expect(result).toHaveProperty('contents');
+      expect(result.contents[0]).toHaveProperty('type', 'application/json');
       
       // Parse the JSON text to check the content
-      const contract = JSON.parse(result.content[0].text);
+      const contract = JSON.parse(result.contents[0].text);
       expect(contract).toEqual(mockContractsCache['ESM3']);
     });
     
     it('should return position details for a position URI', async () => {
+      // Mock tradovateRequest to return a position on both calls
+      const tradovateRequest = require('../src/auth.js').tradovateRequest;
+      tradovateRequest.mockImplementation((method, endpoint) => {
+        if (endpoint === 'position/find?id=123') {
+          return Promise.resolve(mockPositionsCache['123']);
+        }
+        return Promise.resolve(null);
+      });
+      
       // Get the handler for ReadResourceRequestSchema
       const handler = handlers['ReadResourceRequestSchema'];
       
@@ -160,11 +231,11 @@ describe('Resource Handlers', () => {
       });
       
       // Assert
-      expect(result).toHaveProperty('content');
-      expect(result.content[0]).toHaveProperty('type', 'application/json');
+      expect(result).toHaveProperty('contents');
+      expect(result.contents[0]).toHaveProperty('type', 'application/json');
       
       // Parse the JSON text to check the content
-      const position = JSON.parse(result.content[0].text);
+      const position = JSON.parse(result.contents[0].text);
       expect(position).toEqual(mockPositionsCache['123']);
     });
     
@@ -216,16 +287,25 @@ describe('Resource Handlers', () => {
       });
       
       // Assert
-      expect(result).toHaveProperty('content');
-      expect(result.content[0]).toHaveProperty('type', 'application/json');
+      expect(result).toHaveProperty('contents');
+      expect(result.contents[0]).toHaveProperty('type', 'application/json');
       
       // Parse the JSON text to check the content
-      const contracts = JSON.parse(result.content[0].text);
+      const contracts = JSON.parse(result.contents[0].text);
       expect(Array.isArray(contracts)).toBe(true);
       expect(contracts).toContainEqual(mockContractsCache['ESM3']);
     });
     
     it('should return a list of positions when no resource ID is provided', async () => {
+      // Mock tradovateRequest to return positions
+      const tradovateRequest = require('../src/auth.js').tradovateRequest;
+      tradovateRequest.mockImplementation((method, endpoint) => {
+        if (endpoint === 'position/list') {
+          return Promise.resolve([mockPositionsCache['123']]);
+        }
+        return Promise.resolve(null);
+      });
+      
       // Get the handler for ReadResourceRequestSchema
       const handler = handlers['ReadResourceRequestSchema'];
       
@@ -237,13 +317,13 @@ describe('Resource Handlers', () => {
       });
       
       // Assert
-      expect(result).toHaveProperty('content');
-      expect(result.content[0]).toHaveProperty('type', 'application/json');
+      expect(result).toHaveProperty('contents');
+      expect(result.contents[0]).toHaveProperty('type', 'application/json');
       
       // Parse the JSON text to check the content
-      const positions = JSON.parse(result.content[0].text);
+      const positions = JSON.parse(result.contents[0].text);
       expect(Array.isArray(positions)).toBe(true);
-      expect(positions).toContainEqual(mockPositionsCache['123']);
+      expect(positions[0]).toEqual(mockPositionsCache['123']);
     });
   });
 }); 

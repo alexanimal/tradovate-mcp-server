@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { TRADOVATE_API_URL, TRADOVATE_MD_API_URL } from '../src/auth.js';
+import { getTradovateApiUrl, getTradovateMdApiUrl } from '../src/auth.js';
 
 // Define axios request config type
 interface AxiosRequestConfig {
@@ -11,7 +11,7 @@ interface AxiosRequestConfig {
 
 // Create a mock implementation of tradovateRequest
 const mockTradovateRequest = async (method: string, endpoint: string, data?: any, isMarketData: boolean = false): Promise<any> => {
-  const baseUrl = isMarketData ? TRADOVATE_MD_API_URL : TRADOVATE_API_URL;
+  const baseUrl = isMarketData ? getTradovateMdApiUrl() : getTradovateApiUrl();
   const token = 'mock-token';
   
   try {
@@ -230,5 +230,46 @@ describe('API Request Functions', () => {
       // Act & Assert
       await expect(auth.tradovateRequest('GET', 'test/endpoint')).rejects.toThrow('Tradovate API request to test/endpoint failed: Network error');
     });
+  });
+});
+
+// Mock Jest functions
+jest.mock('axios');
+
+// Define a function to make API calls
+async function makeApiCall(method: string, endpoint: string, data?: any, isMarketData: boolean = false): Promise<any> {
+  // Set base URL based on whether this is a market data request
+  const baseUrl = isMarketData ? getTradovateMdApiUrl() : getTradovateApiUrl();
+  
+  // Make the request
+  try {
+    const response = await fetch(`${baseUrl}/${endpoint}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: data ? JSON.stringify(data) : undefined,
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error(`Error making ${method} request to ${endpoint}:`, error);
+    throw error;
+  }
+}
+
+// Tests for makeApiCall function
+describe('makeApiCall', () => {
+  it('should use the correct base URL for regular API calls', () => {
+    expect(getTradovateApiUrl()).toMatch(/tradovateapi.com\/v1$/);
+  });
+  
+  it('should use the correct base URL for market data API calls', () => {
+    expect(getTradovateMdApiUrl()).toMatch(/md.*tradovateapi.com\/v1\/websocket$/);
   });
 }); 

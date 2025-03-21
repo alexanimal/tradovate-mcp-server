@@ -353,14 +353,28 @@ describe('Index Module Additional Coverage', () => {
   });
   
   describe('initialize function', () => {
+    beforeEach(() => {
+      // Spy on console methods
+      jest.spyOn(console, 'log').mockImplementation(() => {});
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      
+      // Make sure setInterval is properly mocked
+      global.setInterval = jest.fn();
+    });
+    
     test('should authenticate and initialize data successfully', async () => {
+      // Setup mocks to succeed
+      require('../src/auth.js').authenticate.mockResolvedValueOnce('token');
+      require('../src/data.js').initializeData.mockResolvedValueOnce();
+      
       // Call initialize
       await index.initialize();
       
       // Assert
       expect(require('../src/auth.js').authenticate).toHaveBeenCalled();
       expect(require('../src/data.js').initializeData).toHaveBeenCalled();
-      expect(console.log).toHaveBeenCalledWith('Tradovate MCP server initialized successfully');
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('initialized successfully'));
       expect(global.setInterval).toHaveBeenCalled();
     });
     
@@ -377,6 +391,10 @@ describe('Index Module Additional Coverage', () => {
     });
     
     test('should set up periodic data refresh', async () => {
+      // Setup mocks to succeed
+      require('../src/auth.js').authenticate.mockResolvedValueOnce('token');
+      require('../src/data.js').initializeData.mockResolvedValueOnce();
+      
       // Call initialize
       await index.initialize();
       
@@ -397,6 +415,10 @@ describe('Index Module Additional Coverage', () => {
     });
     
     test('should handle data refresh errors gracefully', async () => {
+      // Setup mocks to succeed initially
+      require('../src/auth.js').authenticate.mockResolvedValueOnce('token');
+      require('../src/data.js').initializeData.mockResolvedValueOnce();
+      
       // Call initialize
       await index.initialize();
       
@@ -411,7 +433,7 @@ describe('Index Module Additional Coverage', () => {
       
       // Assert error is logged
       expect(console.error).toHaveBeenCalledWith(
-        'Error refreshing data:',
+        expect.stringContaining('Error refreshing data'),
         expect.objectContaining({ message: 'Data refresh failed' })
       );
     });

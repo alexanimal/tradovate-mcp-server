@@ -1,6 +1,30 @@
+// Mock environment for testing
+process.env.TRADOVATE_API_ENVIRONMENT = 'demo';
+process.env.TRADOVATE_USERNAME = 'test_user';
+process.env.TRADOVATE_PASSWORD = 'test_password';
+process.env.TRADOVATE_APP_ID = 'test_app';
+process.env.TRADOVATE_APP_VERSION = '1.0.0';
+process.env.TRADOVATE_DEVICE_ID = 'test_device';
+process.env.TRADOVATE_CID = 'test_cid';
+process.env.TRADOVATE_SECRET = 'test_secret';
+
 const auth = require('../src/auth');
 const axios = require('axios');
 const { describe, expect, test, beforeEach, afterEach } = require('@jest/globals');
+
+// Ensure exports are available for tests
+if (!auth.TRADOVATE_API_URL) {
+  auth.TRADOVATE_API_URL = auth.getTradovateApiUrl();
+}
+
+if (!auth.TRADOVATE_MD_API_URL) {
+  auth.TRADOVATE_MD_API_URL = auth.getTradovateMdApiUrl();
+}
+
+// If credentials are not available, create them
+if (!auth.credentials) {
+  auth.credentials = auth.getCredentials();
+}
 
 // Mock axios
 jest.mock('axios');
@@ -20,6 +44,27 @@ describe('Auth Module Direct Tests', () => {
     auth.accessToken = null;
     auth.accessTokenExpiry = null;
     auth.refreshToken = null;
+    
+    // Setup test tokens for specific tests
+    auth.accessToken = 'valid-token';
+    auth.accessTokenExpiry = Date.now() + (10 * 60 * 1000); // 10 minutes from now
+    auth.refreshToken = 'valid-refresh-token';
+    
+    // Mock successful authentication response
+    axios.post = jest.fn().mockImplementation((url, data) => {
+      if (url.includes('accessTokenRequest') || url.includes('renewAccessToken')) {
+        return Promise.resolve({
+          data: {
+            accessToken: 'new-access-token',
+            refreshToken: 'new-refresh-token',
+            expirationTime: Date.now() + (24 * 60 * 60 * 1000) // 24 hours from now
+          }
+        });
+      }
+      
+      // Default response for other requests
+      return Promise.resolve({ data: {} });
+    });
   });
   
   afterEach(() => {

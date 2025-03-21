@@ -1,28 +1,10 @@
 import axios from 'axios';
+import dotenv from 'dotenv';
+import * as logger from "./logger.js";
+// Load environment variables at module scope
+dotenv.config();
 
-// API URLs for different environments
-const API_URLS = {
-  demo: 'https://demo.tradovateapi.com/v1',
-  live: 'https://live.tradovateapi.com/v1',
-  md_demo: 'https://md-demo.tradovateapi.com/v1',
-  md_live: 'https://md-live.tradovateapi.com/v1'
-};
-
-// Get API environment from env vars
-const API_ENVIRONMENT = process.env.TRADOVATE_API_ENVIRONMENT || 'demo';
-
-// Set API URLs based on environment
-export const TRADOVATE_API_URL = API_URLS[API_ENVIRONMENT as keyof typeof API_URLS] || API_URLS.demo;
-export const TRADOVATE_MD_API_URL = API_ENVIRONMENT.includes('live') ? API_URLS.md_live : API_URLS.md_demo;
-
-// Authentication state
-export let accessToken: string | null = null;
-export let accessTokenExpiry: number | null = null;
-export let refreshToken: string | null = null;
-
-/**
- * Tradovate API authentication credentials
- */
+// Tradovate API authentication credentials interface
 export interface TradovateCredentials {
   name: string;
   password: string;
@@ -33,16 +15,59 @@ export interface TradovateCredentials {
   sec: string;
 }
 
-// Load credentials from environment variables
-export const credentials: TradovateCredentials = {
-  name: process.env.TRADOVATE_USERNAME || '',
-  password: process.env.TRADOVATE_PASSWORD || '',
-  appId: process.env.TRADOVATE_APP_ID || '',
-  appVersion: process.env.TRADOVATE_APP_VERSION || '1.0.0',
-  deviceId: process.env.TRADOVATE_DEVICE_ID || '',
-  cid: process.env.TRADOVATE_CID || '',
-  sec: process.env.TRADOVATE_SECRET || ''
+// API URLs for different environments
+const API_URLS = {
+  demo: 'https://demo.tradovateapi.com/v1',
+  live: 'https://live.tradovateapi.com/v1',
+  md_demo: 'wss://md-demo.tradovateapi.com/v1/websocket',
+  md_live: 'wss://md.tradovateapi.com/v1/websocket'
 };
+
+// Get API environment from env vars - use a function to get fresh values
+function getApiEnvironment() {
+  return process.env.TRADOVATE_API_ENVIRONMENT || 'demo';
+}
+
+// Set API URLs based on environment - updated to use the function
+export function getTradovateApiUrl() {
+  const apiEnv = getApiEnvironment();
+  return API_URLS[apiEnv as keyof typeof API_URLS] || API_URLS.demo;
+}
+
+export function getTradovateMdApiUrl() {
+  const apiEnv = getApiEnvironment();
+  return apiEnv.includes('live') ? API_URLS.md_live : API_URLS.md_demo;
+}
+
+// Keep tokens in memory
+let accessToken: string | null = null;
+let accessTokenExpiry: number | null = null;
+let refreshToken: string | null = null;
+
+// Function to get credentials from environment variables
+// This will be called when needed, not at module initialization
+export function getCredentials(): TradovateCredentials {
+  const credentials: TradovateCredentials = {
+    name: process.env.TRADOVATE_USERNAME || '',
+    password: process.env.TRADOVATE_PASSWORD || '',
+    appId: process.env.TRADOVATE_APP_ID || '',
+    appVersion: process.env.TRADOVATE_APP_VERSION || '1.0.0',
+    deviceId: process.env.TRADOVATE_DEVICE_ID || '',
+    cid: process.env.TRADOVATE_CID || '',
+    sec: process.env.TRADOVATE_SECRET || ''
+  };
+
+  // Debug log for credentials
+  logger.debug('DEBUG: Credentials retrieved from environment:');
+  logger.debug('name present:', !!credentials.name);
+  logger.debug('password present:', !!credentials.password);
+  logger.debug('appId present:', !!credentials.appId);
+  logger.debug('deviceId present:', !!credentials.deviceId);
+  logger.debug('cid present:', !!credentials.cid);
+  logger.debug('sec present:', !!credentials.sec);
+
+  return credentials;
+}
 
 /**
  * Check if the current access token is valid
@@ -65,10 +90,12 @@ export async function refreshAccessToken(): Promise<string> {
     throw new Error('No refresh token available');
   }
   
+  const credentials = getCredentials();
+  
   try {
-    const response = await axios.post(`${TRADOVATE_API_URL}/auth/renewAccessToken`, { 
+    const response = await axios.post(`${getTradovateApiUrl()}/auth/renewAccessToken`, {
       name: credentials.name,
-      refreshToken 
+      refreshToken
     });
     
     if (response.data && response.data.accessToken) {
@@ -81,13 +108,13 @@ export async function refreshAccessToken(): Promise<string> {
         accessTokenExpiry = Date.now() + (24 * 60 * 60 * 1000);
       }
       
-      console.log('Successfully refreshed access token');
+      logger.info('Successfully refreshed access token');
       return response.data.accessToken;
     } else {
       throw new Error('Token refresh response did not contain an access token');
     }
   } catch (error) {
-    console.error('Failed to refresh access token:', error);
+    logger.error('Failed to refresh access token:', error);
     // Clear tokens to force a full re-authentication
     accessToken = null;
     accessTokenExpiry = null;
@@ -110,20 +137,24 @@ export async function authenticate(): Promise<string> {
     try {
       return await refreshAccessToken();
     } catch (error) {
-      console.warn('Failed to refresh token, will attempt full authentication');
+      logger.warn('Failed to refresh token, will attempt full authentication');
       // Continue with full authentication
     }
   }
+  
+  // Get fresh credentials
+  const credentials = getCredentials();
   
   // Perform full authentication
   try {
     // Validate required credentials
     if (!credentials.name || !credentials.password || !credentials.appId || 
         !credentials.deviceId || !credentials.cid || !credentials.sec) {
+      logger.error('DEBUG: Credential validation failed!');
       throw new Error('Missing required Tradovate API credentials');
     }
     
-    const response = await axios.post(`${TRADOVATE_API_URL}/auth/accessTokenRequest`, credentials);
+    const response = await axios.post(`${getTradovateApiUrl()}/auth/accessTokenRequest`, credentials);
     
     if (response.data && response.data.accessToken) {
       accessToken = response.data.accessToken;
@@ -140,13 +171,13 @@ export async function authenticate(): Promise<string> {
         accessTokenExpiry = Date.now() + (24 * 60 * 60 * 1000);
       }
       
-      console.log('Successfully authenticated with Tradovate API');
+      logger.info('Successfully authenticated with Tradovate API');
       return response.data.accessToken;
     } else {
       throw new Error('Authentication response did not contain an access token');
     }
   } catch (error) {
-    console.error('Failed to authenticate with Tradovate API:', error);
+    logger.error('Failed to authenticate with Tradovate API:', error);
     throw new Error('Authentication with Tradovate API failed');
   }
 }
@@ -156,8 +187,8 @@ export async function authenticate(): Promise<string> {
  */
 export async function tradovateRequest(method: string, endpoint: string, data?: any, isMarketData: boolean = false): Promise<any> {
   const token = await authenticate();
-  const baseUrl = isMarketData ? TRADOVATE_MD_API_URL : TRADOVATE_API_URL;
-  
+  const baseUrl = isMarketData ? getTradovateMdApiUrl() : getTradovateApiUrl();
+  logger.info(`Making request to ${baseUrl}/${endpoint}`);
   try {
     const response = await axios({
       method,
@@ -168,7 +199,7 @@ export async function tradovateRequest(method: string, endpoint: string, data?: 
       },
       data
     });
-    
+    logger.info(`Data: ${JSON.stringify(response.data)}`);
     return response.data;
   } catch (error: any) {
     // Handle specific API errors
@@ -187,7 +218,7 @@ export async function tradovateRequest(method: string, endpoint: string, data?: 
       
       // Handle rate limiting
       if (status === 429) {
-        console.warn('Rate limit exceeded, retrying after delay');
+        logger.warn('Rate limit exceeded, retrying after delay');
         // Wait for 2 seconds and retry
         await new Promise(resolve => setTimeout(resolve, 2000));
         return tradovateRequest(method, endpoint, data, isMarketData);
@@ -198,7 +229,7 @@ export async function tradovateRequest(method: string, endpoint: string, data?: 
     }
     
     // Handle network errors
-    console.error(`Error making request to ${endpoint}:`, error);
+    logger.error(`Error making request to ${endpoint}:`, error);
     throw new Error(`Tradovate API request to ${endpoint} failed: ${error.message}`);
   }
 } 

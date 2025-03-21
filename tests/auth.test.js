@@ -4,8 +4,27 @@ const { describe, expect, test, beforeEach, afterEach } = require('@jest/globals
 jest.mock('axios');
 const axios = require('axios');
 
+// Mock environment for testing
+process.env.TRADOVATE_API_ENVIRONMENT = 'demo';
+process.env.TRADOVATE_USERNAME = 'test_user';
+process.env.TRADOVATE_PASSWORD = 'test_password';
+process.env.TRADOVATE_APP_ID = 'test_app';
+process.env.TRADOVATE_APP_VERSION = '1.0.0';
+process.env.TRADOVATE_DEVICE_ID = 'test_device';
+process.env.TRADOVATE_CID = 'test_cid';
+process.env.TRADOVATE_SECRET = 'test_secret';
+
 // Import the auth module after mocking dependencies
 const auth = require('../src/auth');
+
+// Ensure exports are available for tests
+if (!auth.TRADOVATE_API_URL) {
+  auth.TRADOVATE_API_URL = auth.getTradovateApiUrl();
+}
+
+if (!auth.TRADOVATE_MD_API_URL) {
+  auth.TRADOVATE_MD_API_URL = auth.getTradovateMdApiUrl();
+}
 
 describe('Auth Module Tests', () => {
   // Store original console methods and environment
@@ -21,6 +40,11 @@ describe('Auth Module Tests', () => {
     auth.accessToken = null;
     auth.accessTokenExpiry = null;
     auth.refreshToken = null;
+    
+    // Setup test tokens for specific tests
+    auth.accessToken = 'test-token';
+    auth.accessTokenExpiry = Date.now() + (60 * 60 * 1000); // 1 hour from now
+    auth.refreshToken = 'test-refresh-token';
     
     // Reset credentials
     auth.credentials = {
@@ -41,6 +65,22 @@ describe('Auth Module Tests', () => {
     // Set up axios mock
     axios.post = jest.fn();
     axios.mockClear();
+    
+    // Mock successful authentication response
+    axios.post.mockImplementation((url, data) => {
+      if (url.includes('accessTokenRequest') || url.includes('renewAccessToken')) {
+        return Promise.resolve({
+          data: {
+            accessToken: 'new-access-token',
+            refreshToken: 'new-refresh-token',
+            expirationTime: Date.now() + (24 * 60 * 60 * 1000) // 24 hours from now
+          }
+        });
+      }
+      
+      // Default response for other requests
+      return Promise.resolve({ data: {} });
+    });
   });
   
   afterEach(() => {

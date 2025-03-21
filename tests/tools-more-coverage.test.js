@@ -152,14 +152,44 @@ describe('Additional Tool Handlers for Coverage', () => {
         description: 'E-mini S&P 500' 
       });
       
-      // Mock API error
+      // Mock positions lookup - second call
+      auth.tradovateRequest.mockResolvedValueOnce([
+        { 
+          id: 100,
+          accountId: 12345,
+          contractId: 1,
+          netPos: 1 
+        }
+      ]);
+      
+      // Mock API error on liquidation attempt - third call
       auth.tradovateRequest.mockRejectedValueOnce(new Error('API error'));
+      
+      // Mock contract lookup for retry - fourth call
+      auth.tradovateRequest.mockResolvedValueOnce({ 
+        id: 1, 
+        name: 'ESZ4', 
+        description: 'E-mini S&P 500' 
+      });
+      
+      // Mock positions lookup for retry - fifth call
+      auth.tradovateRequest.mockResolvedValueOnce([
+        { 
+          id: 100,
+          accountId: 12345,
+          contractId: 1,
+          netPos: 1 
+        }
+      ]);
+      
+      // Mock API error on retry liquidation - sixth call
+      auth.tradovateRequest.mockRejectedValueOnce(new Error('API error on retry'));
 
       // Act
       const result = await handleLiquidatePosition(request);
 
       // Assert
-      expect(result.content[0].text).toContain('Position liquidated successfully (simulated)');
+      expect(result.content[0].text).toContain('Failed to liquidate position for ESZ4:');
     });
 
     it('should handle missing symbol', async () => {
