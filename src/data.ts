@@ -1,3 +1,4 @@
+import * as logger from "./logger.js";
 import { tradovateRequest } from './auth.js';
 import { Contract, Position, Order, Account } from './types.js';
 
@@ -25,7 +26,7 @@ export async function fetchContracts(): Promise<{ [id: string]: Contract }> {
     contractsCache = contractsMap;
     return contractsMap;
   } catch (error) {
-    console.error('Error fetching contracts:', error);
+    logger.error('Error fetching contracts:', error);
     // Return cache if available, otherwise empty object
     return contractsCache || {};
   }
@@ -49,7 +50,7 @@ export async function fetchPositions(): Promise<{ [id: string]: Position }> {
     positionsCache = positionsMap;
     return positionsMap;
   } catch (error) {
-    console.error('Error fetching positions:', error);
+    logger.error('Error fetching positions:', error);
     // Return cache if available, otherwise empty object
     return positionsCache || {};
   }
@@ -73,7 +74,7 @@ export async function fetchOrders(): Promise<{ [id: string]: Order }> {
     ordersCache = ordersMap;
     return ordersMap;
   } catch (error) {
-    console.error('Error fetching orders:', error);
+    logger.error('Error fetching orders:', error);
     // Return cache if available, otherwise empty object
     return ordersCache || {};
   }
@@ -97,7 +98,7 @@ export async function fetchAccounts(): Promise<{ [id: string]: Account }> {
     accountsCache = accountsMap;
     return accountsMap;
   } catch (error) {
-    console.error('Error fetching accounts:', error);
+    logger.error('Error fetching accounts:', error);
     // Return cache if available, otherwise empty object
     return accountsCache || {};
   }
@@ -108,7 +109,7 @@ export async function fetchAccounts(): Promise<{ [id: string]: Account }> {
  */
 export async function initializeData() {
   try {
-    console.log('Initializing data from Tradovate API...');
+    logger.info('Initializing data from Tradovate API...');
     
     // Fetch all data in parallel
     await Promise.all([
@@ -118,10 +119,10 @@ export async function initializeData() {
       fetchAccounts()
     ]);
     
-    console.log('Data initialization complete');
+    logger.info('Data initialization complete');
   } catch (error) {
-    console.error('Error initializing data:', error);
-    console.warn('Using mock data as fallback');
+    logger.error('Error initializing data:', error);
+    logger.warn('Using mock data as fallback');
     
     // Use mock data as fallback
     if (Object.keys(contractsCache).length === 0) {

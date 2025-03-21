@@ -1,3 +1,4 @@
+import * as logger from "./logger.js";
 import { tradovateRequest } from './auth.js';
 import { contractsCache, positionsCache, ordersCache, accountsCache, fetchPositions } from './data.js';
 
@@ -30,7 +31,7 @@ export async function handleGetContractDetails(request: any) {
       }]
     };
   } catch (error) {
-    console.error(`Error getting contract details for ${symbol}:`, error);
+    logger.error(`Error getting contract details for ${symbol}:`, error);
     
     // Fallback to cached data
     const cachedContract = Object.values(contractsCache).find(c => c.name === symbol);
@@ -77,58 +78,50 @@ export async function handleListPositions(request: any) {
       };
     }
 
-    // Enrich positions with contract information
-    const enrichedPositions = await Promise.all(positions.map(async (position: any) => {
-      const contract = await tradovateRequest('GET', `contract/find?id=${position.contractId}`);
-      return {
-        ...position,
-        contractName: contract?.name || "Unknown",
-        contractDescription: contract?.description || "Unknown"
-      };
-    }));
-
     return {
       content: [{
         type: "text",
-        text: `Positions${accountId ? ` for account ${accountId}` : ''}:\n${JSON.stringify(enrichedPositions, null, 2)}`
+        text: `Positions${accountId ? ` for account ${accountId}` : ''}:\n${JSON.stringify(positions, null, 2)}`
       }]
     };
   } catch (error) {
-    console.error("Error listing positions:", error);
+    // Log error but attempt to retry once more before giving up
+    logger.error("Error listing positions, retrying:", error);
     
-    // Fallback to cached data
-    let cachedPositions = Object.values(positionsCache);
-    
-    // Filter by account ID if provided
-    if (accountId) {
-      cachedPositions = cachedPositions.filter(p => p.accountId.toString() === accountId);
-    }
-    
-    if (cachedPositions.length === 0) {
+    try {
+      // Retry API call
+      let endpoint = 'position/list';
+      if (accountId) {
+        endpoint += `?accountId=${accountId}`;
+      }
+      
+      const positions = await tradovateRequest('GET', endpoint);
+      
+      if (!positions || positions.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `No positions found${accountId ? ` for account ${accountId}` : ''}`
+          }]
+        };
+      }
+
       return {
         content: [{
           type: "text",
-          text: `No positions found${accountId ? ` for account ${accountId}` : ''} (cached)`
+          text: `Positions${accountId ? ` for account ${accountId}` : ''}:\n${JSON.stringify(positions, null, 2)}`
+        }]
+      };
+    } catch (retryError) {
+      logger.error("Error listing positions after retry:", retryError);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `Error fetching positions: ${retryError instanceof Error ? retryError.message : String(retryError)}`
         }]
       };
     }
-
-    // Enrich positions with contract information
-    const enrichedPositions = cachedPositions.map(position => {
-      const contract = contractsCache[position.contractId.toString()];
-      return {
-        ...position,
-        contractName: contract?.name || "Unknown",
-        contractDescription: contract?.description || "Unknown"
-      };
-    });
-
-    return {
-      content: [{
-        type: "text",
-        text: `Positions${accountId ? ` for account ${accountId}` : ''} (cached):\n${JSON.stringify(enrichedPositions, null, 2)}`
-      }]
-    };
   }
 }
 
@@ -201,7 +194,7 @@ export async function handlePlaceOrder(request: any) {
       }]
     };
   } catch (error) {
-    console.error("Error placing order:", error);
+    logger.error("Error placing order:", error);
     
     // Fallback to cached data for simulation
     try {
@@ -253,7 +246,7 @@ export async function handlePlaceOrder(request: any) {
         }]
       };
     } catch (fallbackError) {
-      console.error("Error in fallback order placement:", fallbackError);
+      logger.error("Error in fallback order placement:", fallbackError);
       return {
         content: [{
           type: "text",
@@ -309,7 +302,7 @@ export async function handleModifyOrder(request: any) {
       }]
     };
   } catch (error) {
-    console.error(`Error modifying order ${orderId}:`, error);
+    logger.error(`Error modifying order ${orderId}:`, error);
     
     // Fallback to cached data for simulation
     const cachedOrder = ordersCache[orderId];
@@ -373,7 +366,7 @@ export async function handleCancelOrder(request: any) {
       }]
     };
   } catch (error) {
-    console.error(`Error canceling order ${orderId}:`, error);
+    logger.error(`Error canceling order ${orderId}:`, error);
     
     // Fallback to cached data for simulation
     const cachedOrder = ordersCache[orderId];
@@ -441,9 +434,6 @@ export async function handleLiquidatePosition(request: any) {
       contractId: position.contractId
     });
 
-    // Refresh positions cache
-    await fetchPositions();
-
     return {
       content: [{
         type: "text",
@@ -451,61 +441,57 @@ export async function handleLiquidatePosition(request: any) {
       }]
     };
   } catch (error) {
-    console.error(`Error liquidating position for ${symbol}:`, error);
+    logger.error(`Error liquidating position for ${symbol}, retrying:`, error);
     
-    // Fallback to cached data for simulation
-    const cachedContract = Object.values(contractsCache).find(c => c.name === symbol);
-    
-    if (!cachedContract) {
+    // Retry once before giving up
+    try {
+      // Find contract by symbol (retry)
+      const contract = await tradovateRequest('GET', `contract/find?name=${symbol}`);
+      
+      if (!contract) {
+        return {
+          content: [{
+            type: "text",
+            text: `Contract not found for symbol: ${symbol}`
+          }]
+        };
+      }
+
+      // Find position by contract ID (retry)
+      const positions = await tradovateRequest('GET', 'position/list');
+      const position = positions.find((p: any) => p.contractId === contract.id);
+      
+      if (!position) {
+        return {
+          content: [{
+            type: "text",
+            text: `No position found for symbol: ${symbol}`
+          }]
+        };
+      }
+
+      // Liquidate position via API (retry)
+      const liquidationResult = await tradovateRequest('POST', 'order/liquidatePosition', { 
+        accountId: position.accountId,
+        contractId: position.contractId
+      });
+
       return {
         content: [{
           type: "text",
-          text: `Contract not found for symbol: ${symbol}`
+          text: `Position liquidated successfully:\n${JSON.stringify(liquidationResult, null, 2)}`
         }]
       };
-    }
-
-    // Find position by contract ID
-    const cachedPosition = Object.values(positionsCache).find(p => p.contractId === cachedContract.id);
-    
-    if (!cachedPosition) {
+    } catch (retryError) {
+      logger.error(`Error liquidating position for ${symbol} after retry:`, retryError);
+      
       return {
         content: [{
-          type: "text",
-          text: `No position found for symbol: ${symbol}`
+          type: "text", 
+          text: `Failed to liquidate position for ${symbol}: ${retryError instanceof Error ? retryError.message : String(retryError)}`
         }]
       };
     }
-
-    // Create simulated liquidation order
-    const newOrderId = String(Object.keys(ordersCache).length + 1);
-    const action = cachedPosition.netPos > 0 ? "Sell" : "Buy";
-    const simulatedOrder = {
-      id: parseInt(newOrderId),
-      accountId: cachedPosition.accountId,
-      contractId: cachedPosition.contractId,
-      timestamp: new Date().toISOString(),
-      action,
-      ordStatus: "Working",
-      orderQty: Math.abs(cachedPosition.netPos),
-      orderType: "Market"
-    };
-
-    // Add to orders cache
-    ordersCache[newOrderId] = simulatedOrder;
-
-    // Update position in cache
-    const realizedPnl = cachedPosition.openPnl;
-    cachedPosition.netPos = 0;
-    cachedPosition.realizedPnl += realizedPnl;
-    cachedPosition.openPnl = 0;
-
-    return {
-      content: [{
-        type: "text",
-        text: `Position liquidated successfully (simulated):\n${JSON.stringify(cachedPosition, null, 2)}\nLiquidation order:\n${JSON.stringify(simulatedOrder, null, 2)}`
-      }]
-    };
   }
 }
 
@@ -570,59 +556,73 @@ export async function handleGetAccountSummary(request: any) {
       }]
     };
   } catch (error) {
-    console.error("Error getting account summary:", error);
+    logger.error("Error getting account summary, retrying:", error);
     
-    // Fallback to cached data for simulation
-    let cachedAccount;
-    
-    if (accountId) {
-      cachedAccount = accountsCache[accountId];
-      if (!cachedAccount) {
-        return {
-          content: [{
-            type: "text",
-            text: `Account not found with ID: ${accountId}`
-          }]
-        };
+    // Retry the API call once before giving up
+    try {
+      // Get accounts (retry)
+      let accounts;
+      if (accountId) {
+        accounts = [await tradovateRequest('GET', `account/find?id=${accountId}`)];
+        if (!accounts[0]) {
+          return {
+            content: [{
+              type: "text",
+              text: `Account not found with ID: ${accountId}`
+            }]
+          };
+        }
+      } else {
+        accounts = await tradovateRequest('GET', 'account/list');
+        if (!accounts || accounts.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `No accounts found`
+            }]
+          };
+        }
       }
-    } else {
-      const cachedAccounts = Object.values(accountsCache);
-      if (cachedAccounts.length === 0) {
-        return {
-          content: [{
-            type: "text",
-            text: `No accounts found in cache`
-          }]
-        };
-      }
-      cachedAccount = cachedAccounts[0];
+  
+      const account = accounts[0];
+      const actualAccountId = account.id;
+  
+      // Get cash balance (retry)
+      const cashBalance = await tradovateRequest('POST', 'cashBalance/getCashBalanceSnapshot', { accountId: actualAccountId });
+      
+      // Get positions (retry)
+      const positions = await tradovateRequest('GET', `position/list?accountId=${actualAccountId}`);
+      
+      // Calculate summary
+      const totalRealizedPnl = positions.reduce((sum: number, pos: any) => sum + pos.realizedPnl, 0);
+      const totalOpenPnl = positions.reduce((sum: number, pos: any) => sum + pos.openPnl, 0);
+      
+      const summary = {
+        account,
+        balance: cashBalance.cashBalance,
+        openPnl: totalOpenPnl,
+        totalEquity: cashBalance.cashBalance + totalOpenPnl,
+        marginUsed: cashBalance.initialMargin,
+        availableMargin: cashBalance.cashBalance - cashBalance.initialMargin + totalOpenPnl,
+        positionCount: positions.length
+      };
+  
+      return {
+        content: [{
+          type: "text",
+          text: `Account summary for ${account.name}:\n${JSON.stringify(summary, null, 2)}`
+        }]
+      };
+    } catch (retryError) {
+      logger.error("Error getting account summary after retry:", retryError);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `Error getting account summary: ${retryError instanceof Error ? retryError.message : String(retryError)}`
+        }]
+      };
     }
-
-    // Calculate account summary using cached data
-    const cachedPositions = Object.values(positionsCache).filter(p => p.accountId === cachedAccount.id);
-    const totalRealizedPnl = cachedPositions.reduce((sum, pos) => sum + pos.realizedPnl, 0);
-    const totalOpenPnl = cachedPositions.reduce((sum, pos) => sum + pos.openPnl, 0);
-    
-    // Create simulated cash balance
-    const simulatedBalance = 100000 + totalRealizedPnl; // Mock initial balance
-    const simulatedMargin = 10000; // Mock margin
-    
-    const summary = {
-      account: cachedAccount,
-      balance: simulatedBalance,
-      openPnl: totalOpenPnl,
-      totalEquity: simulatedBalance + totalOpenPnl,
-      marginUsed: simulatedMargin,
-      availableMargin: simulatedBalance - simulatedMargin + totalOpenPnl,
-      positionCount: cachedPositions.length
-    };
-
-    return {
-      content: [{
-        type: "text",
-        text: `Account summary for ${cachedAccount.name} (simulated):\n${JSON.stringify(summary, null, 2)}`
-      }]
-    };
   }
 }
 
@@ -700,7 +700,7 @@ export async function handleGetMarketData(request: any) {
       }]
     };
   } catch (error) {
-    console.error(`Error getting market data for ${symbol}:`, error);
+    logger.error(`Error getting market data for ${symbol}:`, error);
     
     // Fallback to mock data
     const mockContract = Object.values(contractsCache).find(c => c.name === symbol);

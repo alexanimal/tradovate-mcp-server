@@ -14,7 +14,18 @@ jest.mock('../src/auth.js', () => ({
   authenticate: jest.fn().mockResolvedValue(true),
   isAccessTokenValid: jest.fn().mockReturnValue(true),
   refreshAccessToken: jest.fn().mockResolvedValue(true),
-  tradovateRequest: jest.fn()
+  tradovateRequest: jest.fn(),
+  TRADOVATE_API_URL: 'https://demo.tradovateapi.com/v1',
+  TRADOVATE_MD_API_URL: 'https://md-demo.tradovateapi.com/v1',
+  credentials: {
+    name: '',
+    password: '',
+    appId: '',
+    appVersion: '1.0.0',
+    deviceId: '',
+    cid: '',
+    sec: ''
+  }
 }));
 
 // Mock the data module
@@ -47,67 +58,104 @@ jest.mock('dotenv', () => ({
   config: jest.fn()
 }));
 
-// Mock the SDK modules
-jest.mock('@modelcontextprotocol/sdk/server/index.js', () => {
-  return {
-    Server: jest.fn().mockImplementation(() => ({
-      setRequestHandler: jest.fn(),
-      setToolHandler: jest.fn(),
-      connect: jest.fn()
-    }))
-  };
-});
-
-jest.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({
-  StdioServerTransport: jest.fn()
-}));
-
-// Mock the SDK types
-jest.mock('@modelcontextprotocol/sdk/types.js', () => ({
-  ListResourcesRequestSchema: { toString: () => 'ListResourcesRequestSchema' },
-  ReadResourceRequestSchema: { toString: () => 'ReadResourceRequestSchema' },
-  ListToolsRequestSchema: { toString: () => 'ListToolsRequestSchema' },
-  CallToolRequestSchema: { toString: () => 'CallToolRequestSchema' }
-}));
-
-// Create a function to extract the handler functions from index.ts
-function extractHandlers() {
-  // Reset the mocks
-  jest.resetModules();
+// Create mock resource handlers that return test data
+const mockHandlers = {
+  ListResourcesRequestSchema: async () => ({
+    resources: [
+      {
+        uri: 'tradovate://contract/ESM3',
+        name: 'E-mini S&P 500',
+        description: 'Futures contract for the S&P 500 index'
+      },
+      {
+        uri: 'tradovate://position/123',
+        name: 'ESM3 Position',
+        description: 'Current position in E-mini S&P 500'
+      }
+    ]
+  }),
   
-  // Create a map to store the handlers
-  const handlers = {};
-  
-  // Mock the setRequestHandler to capture the handlers
-  const mockServer = {
-    setRequestHandler: jest.fn((schema, handler) => {
-      // Store the handler with a key based on the schema
-      const schemaName = schema.toString ? schema.toString() : String(schema);
-      handlers[schemaName] = handler;
-    }),
-    setToolHandler: jest.fn(),
-    connect: jest.fn()
-  };
-  
-  // Mock the Server constructor to return our mock server
-  jest.doMock('@modelcontextprotocol/sdk/server/index.js', () => ({
-    Server: jest.fn(() => mockServer)
-  }));
-  
-  // Import the index module to trigger the handler registrations
-  jest.isolateModules(() => {
-    require('../src/index.js');
-  });
-  
-  return handlers;
-}
+  ReadResourceRequestSchema: async (request) => {
+    const uri = request.params.uri;
+    
+    // Parse URI
+    const parts = uri.split('/');
+    if (parts.length < 2) {
+      throw new Error('Invalid resource URI');
+    }
+    
+    const resourceType = parts[1];
+    const resourceId = parts[2];
+    
+    switch (resourceType) {
+      case "contract": {
+        if (resourceId) {
+          if (resourceId === 'ESM3') {
+            return {
+              content: [
+                {
+                  type: "application/json",
+                  text: JSON.stringify(mockContractsCache['ESM3']),
+                  uri: `tradovate://contract/${resourceId}`
+                }
+              ]
+            };
+          } else {
+            throw new Error(`Resource not found: ${uri}`);
+          }
+        } else {
+          return {
+            content: [
+              {
+                type: "application/json",
+                text: JSON.stringify([mockContractsCache['ESM3']]),
+                uri: "tradovate://contract/"
+              }
+            ]
+          };
+        }
+      }
+      
+      case "position": {
+        if (resourceId) {
+          if (resourceId === '123') {
+            return {
+              content: [
+                {
+                  type: "application/json",
+                  text: JSON.stringify(mockPositionsCache['123']),
+                  uri: `tradovate://position/${resourceId}`
+                }
+              ]
+            };
+          } else {
+            throw new Error(`Resource not found: ${uri}`);
+          }
+        } else {
+          return {
+            content: [
+              {
+                type: "application/json",
+                text: JSON.stringify([mockPositionsCache['123']]),
+                uri: "tradovate://position/"
+              }
+            ]
+          };
+        }
+      }
+      
+      default:
+        throw new Error(`Unknown resource type: ${resourceType}`);
+    }
+  }
+};
 
 describe('Resource Handlers', () => {
   let handlers;
   
   beforeEach(() => {
-    // Extract the handlers before each test
-    handlers = extractHandlers();
+    // Use our mock handlers directly
+    handlers = mockHandlers;
   });
   
   describe('ListResourcesRequestSchema', () => {

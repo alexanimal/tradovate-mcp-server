@@ -4,3 +4,4 @@ build/
 .env
 coverage/
 coverage-report.json
+.cursorrules

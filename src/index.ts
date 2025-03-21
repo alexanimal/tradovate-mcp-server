@@ -9,6 +9,13 @@
  * - Getting account information and market data
  */
 
+// First, load environment variables from .env file
+import dotenv from "dotenv";
+dotenv.config();
+
+import * as logger from "./logger.js";
+
+// Then import other dependencies
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -19,7 +26,7 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import dotenv from "dotenv";
+
 import { fileURLToPath } from "url";
 
 // Import from abstracted modules
@@ -42,9 +49,6 @@ import {
   handleGetMarketData
 } from "./tools.js";
 
-// Load environment variables from .env file
-dotenv.config();
-
 /**
  * Create the MCP server
  */
@@ -62,6 +66,7 @@ export const server = new Server(
           description: "Current positions in your Tradovate account",
         },
       },
+      prompts: {},
       tools: {
         get_contract_details: {
           description: "Get detailed information about a specific contract by symbol",
@@ -239,7 +244,15 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const uri = request.params.uri;
   
   // Parse the URI to get the resource type and ID
-  const [, resourceType, resourceId] = uri.split("/");
+  // Handle both tradovate:// protocol scheme and simple tradovate/ format
+  const match = uri.match(/^(?:tradovate:\/\/|tradovate\/)([^\/]+)(?:\/(.*))?$/);
+  
+  if (!match) {
+    throw new Error(`Invalid resource URI: ${uri}`);
+  }
+  
+  const resourceType = match[1];
+  const resourceId = match[2] || '';
   
   if (!resourceType) {
     throw new Error(`Invalid resource URI: ${uri}`);
@@ -256,10 +269,11 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         }
         
         return {
-          content: [
+          contents: [
             {
               type: "application/json",
               text: JSON.stringify(contract),
+              uri: `tradovate://contract/${resourceId}`
             },
           ],
         };
@@ -268,10 +282,11 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         const contracts = Object.values(contractsCache);
         
         return {
-          content: [
+          contents: [
             {
               type: "application/json",
               text: JSON.stringify(contracts),
+              uri: "tradovate://contract/"
             },
           ],
         };
@@ -280,32 +295,44 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     
     case "position": {
       if (resourceId) {
-        // Return specific position
-        const position = positionsCache[resourceId];
-        if (!position) {
+        // Return specific position - fetch directly from API
+        try {
+          const position = await tradovateRequest('GET', `position/find?id=${resourceId}`);
+          if (!position) {
+            throw new Error(`Resource not found: ${uri}`);
+          }
+          
+          return {
+            contents: [
+              {
+                type: "application/json",
+                text: JSON.stringify(position),
+                uri: `tradovate://position/${resourceId}`
+              },
+            ],
+          };
+        } catch (error) {
+          logger.error(`Error fetching position ${resourceId}:`, error);
           throw new Error(`Resource not found: ${uri}`);
         }
-        
-        return {
-          content: [
-            {
-              type: "application/json",
-              text: JSON.stringify(position),
-            },
-          ],
-        };
       } else {
-        // Return list of positions
-        const positions = Object.values(positionsCache);
-        
-        return {
-          content: [
-            {
-              type: "application/json",
-              text: JSON.stringify(positions),
-            },
-          ],
-        };
+        // Return list of positions - fetch directly from API
+        try {
+          const positions = await tradovateRequest('GET', 'position/list');
+          
+          return {
+            contents: [
+              {
+                type: "application/json",
+                text: JSON.stringify(positions),
+                uri: "tradovate://position/"
+              },
+            ],
+          };
+        } catch (error) {
+          logger.error('Error fetching positions:', error);
+          throw new Error(`Error fetching positions: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
     
@@ -323,34 +350,156 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "get_contract_details",
         description: "Get detailed information about a specific contract by symbol",
+        inputSchema: {
+          type: "object",
+          properties: {
+            symbol: {
+              type: "string",
+              description: "The contract symbol (e.g., ESZ4, NQZ4)",
+            },
+          },
+          required: ["symbol"],
+        },
       },
       {
         name: "list_positions",
         description: "List all positions for an account",
+        inputSchema: {
+          type: "object",
+          properties: {
+            accountId: {
+              type: "string",
+              description: "The account ID (optional, will use default if not provided)",
+            },
+          },
+        },
       },
       {
         name: "place_order",
         description: "Place a new order",
+        inputSchema: {
+          type: "object",
+          properties: {
+            symbol: {
+              type: "string",
+              description: "The contract symbol (e.g., ESZ4, NQZ4)",
+            },
+            action: {
+              type: "string",
+              description: "Buy or Sell",
+              enum: ["Buy", "Sell"],
+            },
+            orderType: {
+              type: "string",
+              description: "Type of order",
+              enum: ["Market", "Limit", "Stop", "StopLimit"],
+            },
+            quantity: {
+              type: "number",
+              description: "Number of contracts",
+            },
+            price: {
+              type: "number",
+              description: "Price for Limit and StopLimit orders",
+            },
+            stopPrice: {
+              type: "number",
+              description: "Stop price for Stop and StopLimit orders",
+            },
+          },
+          required: ["symbol", "action", "orderType", "quantity"],
+        },
       },
       {
         name: "modify_order",
         description: "Modify an existing order",
+        inputSchema: {
+          type: "object",
+          properties: {
+            orderId: {
+              type: "string",
+              description: "The order ID to modify",
+            },
+            price: {
+              type: "number",
+              description: "New price for Limit and StopLimit orders",
+            },
+            stopPrice: {
+              type: "number",
+              description: "New stop price for Stop and StopLimit orders",
+            },
+            quantity: {
+              type: "number",
+              description: "New quantity",
+            },
+          },
+          required: ["orderId"],
+        },
       },
       {
         name: "cancel_order",
         description: "Cancel an existing order",
+        inputSchema: {
+          type: "object",
+          properties: {
+            orderId: {
+              type: "string",
+              description: "The order ID to cancel",
+            },
+          },
+          required: ["orderId"],
+        },
       },
       {
         name: "liquidate_position",
         description: "Close an existing position",
+        inputSchema: {
+          type: "object",
+          properties: {
+            symbol: {
+              type: "string",
+              description: "The contract symbol (e.g., ESZ4, NQZ4)",
+            },
+          },
+          required: ["symbol"],
+        },
       },
       {
         name: "get_account_summary",
         description: "Get account summary information",
+        inputSchema: {
+          type: "object",
+          properties: {
+            accountId: {
+              type: "string",
+              description: "The account ID (optional, will use default if not provided)",
+            },
+          },
+        },
       },
       {
         name: "get_market_data",
         description: "Get market data for a specific contract",
+        inputSchema: {
+          type: "object",
+          properties: {
+            symbol: {
+              type: "string",
+              description: "The contract symbol (e.g., ESZ4, NQZ4)",
+            },
+            dataType: {
+              type: "string",
+              description: "Type of market data to retrieve",
+              enum: ["Quote", "DOM", "Chart"],
+            },
+            chartTimeframe: {
+              type: "string",
+              description: "Timeframe for chart data",
+              enum: ["1min", "5min", "15min", "30min", "1hour", "4hour", "1day"],
+            },
+          },
+          required: ["symbol", "dataType"],
+        },
       },
     ],
   };
@@ -392,13 +541,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 /**
+ * Prompt/template handlers for the MCP server
+ */
+server.setRequestHandler(ListPromptsRequestSchema, async () => {
+  return {
+    prompts: [] // No templates/prompts available in this server
+  };
+});
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  throw new Error(`Prompt not found: ${request.params.id}`);
+});
+
+/**
  * Initialize the server by authenticating with Tradovate API
  */
 export async function initialize() {
   try {
     // Authenticate with Tradovate API
     await authenticate();
-    console.log("Tradovate MCP server initialized successfully");
+    logger.info("Tradovate MCP server initialized successfully");
     
     // Initialize data
     await initializeData();
@@ -408,12 +570,12 @@ export async function initialize() {
       try {
         await initializeData();
       } catch (error) {
-        console.error("Error refreshing data:", error);
+        logger.error("Error refreshing data:", error);
       }
     }, 5 * 60 * 1000);
   } catch (error) {
-    console.error("Failed to initialize Tradovate MCP server:", error);
-    console.warn("Server will start with mock data fallback");
+    logger.error("Failed to initialize Tradovate MCP server:", error);
+    logger.warn("Server will start with mock data fallback");
   }
 }
 
@@ -437,7 +599,7 @@ if (!isTestEnvironment) {
   const isMainModule = process.argv.length > 1 && process.argv[1].includes('index');
   if (isMainModule) {
     main().catch((error) => {
-      console.error("Server error:", error);
+      logger.error("Server error:", error);
       process.exit(1);
     });
   }
