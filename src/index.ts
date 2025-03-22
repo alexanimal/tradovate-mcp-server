@@ -27,6 +27,7 @@ import {
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
+
 import { fileURLToPath } from "url";
 
 // Import from abstracted modules
@@ -46,7 +47,8 @@ import {
   handleCancelOrder,
   handleLiquidatePosition,
   handleGetAccountSummary,
-  handleGetMarketData
+  handleGetMarketData,
+  handleListOrders
 } from "./tools.js";
 
 /**
@@ -214,6 +216,19 @@ export const server = new Server(
             required: ["symbol", "dataType"],
           },
         },
+        list_orders: {
+          description: "Get a list of orders, optionally filtered by account ID",
+          parameters: {
+            type: "object",
+            properties: {
+              accountId: {
+                type: "string",
+                description: "Optional account ID to filter orders by"
+              }
+            },
+            required: []
+          },
+        },
       },
     },
   }
@@ -359,7 +374,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["symbol"],
-        },
+        }
       },
       {
         name: "list_positions",
@@ -372,7 +387,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "The account ID (optional, will use default if not provided)",
             },
           },
-        },
+        }
       },
       {
         name: "place_order",
@@ -408,7 +423,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["symbol", "action", "orderType", "quantity"],
-        },
+        }
       },
       {
         name: "modify_order",
@@ -434,7 +449,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["orderId"],
-        },
+        }
       },
       {
         name: "cancel_order",
@@ -448,7 +463,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["orderId"],
-        },
+        }
       },
       {
         name: "liquidate_position",
@@ -462,7 +477,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["symbol"],
-        },
+        }
       },
       {
         name: "get_account_summary",
@@ -475,7 +490,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "The account ID (optional, will use default if not provided)",
             },
           },
-        },
+        }
       },
       {
         name: "get_market_data",
@@ -499,6 +514,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["symbol", "dataType"],
+        },
+      },
+      {
+        name: "list_orders",
+        description: "Get a list of orders, optionally filtered by account ID",
+        inputSchema: {
+          type: "object",
+          properties: {
+            accountId: {
+              type: "string",
+              description: "Optional account ID to filter orders by"
+            }
+          },
+          required: []
         },
       },
     ],
@@ -535,9 +564,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "get_market_data":
       return await handleGetMarketData(request);
     
+    case "list_orders":
+      return await handleListOrders(request);
+    
     default:
       throw new Error(`Unknown tool: ${request.params.name}`);
   }
+});
+
+/**
+ * Prompt/template handlers for the MCP server
+ */
+server.setRequestHandler(ListPromptsRequestSchema, async () => {
+  return {
+    prompts: [] // No templates/prompts available in this server
+  };
+});
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  throw new Error(`Prompt not found: ${request.params.id}`);
 });
 
 /**
@@ -561,6 +606,7 @@ export async function initialize() {
     // Authenticate with Tradovate API
     await authenticate();
     logger.info("Tradovate MCP server initialized successfully");
+    logger.info("Tradovate MCP server initialized successfully");
     
     // Initialize data
     await initializeData();
@@ -571,9 +617,12 @@ export async function initialize() {
         await initializeData();
       } catch (error) {
         logger.error("Error refreshing data:", error);
+        logger.error("Error refreshing data:", error);
       }
-    }, 5 * 60 * 1000);
+    }, 60 * 60 * 1000);
   } catch (error) {
+    logger.error("Failed to initialize Tradovate MCP server:", error);
+    logger.warn("Server will start with mock data fallback");
     logger.error("Failed to initialize Tradovate MCP server:", error);
     logger.warn("Server will start with mock data fallback");
   }
@@ -599,6 +648,7 @@ if (!isTestEnvironment) {
   const isMainModule = process.argv.length > 1 && process.argv[1].includes('index');
   if (isMainModule) {
     main().catch((error) => {
+      logger.error("Server error:", error);
       logger.error("Server error:", error);
       process.exit(1);
     });
