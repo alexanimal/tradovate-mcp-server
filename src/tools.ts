@@ -802,4 +802,90 @@ export async function handleGetMarketData(request: any) {
       }]
     };
   }
+}
+
+/**
+ * Handle list_orders tool
+ */
+export async function handleListOrders(request: any) {
+  const accountId = String(request.params.arguments?.accountId || "");
+  
+  try {
+    // Get orders from API
+    let endpoint = 'order/list';
+    if (accountId) {
+      endpoint += `?accountId=${accountId}`;
+    }
+    
+    const orders = await tradovateRequest('GET', endpoint);
+    
+    if (!orders || orders.length === 0) {
+      return {
+        content: [{
+          type: "text",
+          text: `No orders found${accountId ? ` for account ${accountId}` : ''}`
+        }]
+      };
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: `Orders${accountId ? ` for account ${accountId}` : ''}:\n${JSON.stringify(orders, null, 2)}`
+      }]
+    };
+  } catch (error) {
+    // Log error but attempt to retry once more before giving up
+    logger.error("Error listing orders, retrying:", error);
+    
+    try {
+      // Retry API call
+      let endpoint = 'order/list';
+      if (accountId) {
+        endpoint += `?accountId=${accountId}`;
+      }
+      
+      const orders = await tradovateRequest('GET', endpoint);
+      
+      if (!orders || orders.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `No orders found${accountId ? ` for account ${accountId}` : ''}`
+          }]
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `Orders${accountId ? ` for account ${accountId}` : ''}:\n${JSON.stringify(orders, null, 2)}`
+        }]
+      };
+    } catch (retryError) {
+      logger.error("Error listing orders after retry:", retryError);
+      
+      // Fallback to cached data
+      const cachedOrders = Object.values(ordersCache);
+      const filteredOrders = accountId 
+        ? cachedOrders.filter(order => order.accountId === parseInt(accountId))
+        : cachedOrders;
+      
+      if (filteredOrders.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `No orders found${accountId ? ` for account ${accountId}` : ''} (cached)`
+          }]
+        };
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: `Orders${accountId ? ` for account ${accountId}` : ''} (cached):\n${JSON.stringify(filteredOrders, null, 2)}`
+        }]
+      };
+    }
+  }
 } 

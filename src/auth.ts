@@ -199,7 +199,7 @@ export async function tradovateRequest(method: string, endpoint: string, data?: 
       },
       data
     });
-    logger.info(`Data: ${JSON.stringify(response.data)}`);
+    logger.info(`${baseUrl}/${endpoint}: ${JSON.stringify(response.data)}`);
     return response.data;
   } catch (error: any) {
     // Handle specific API errors

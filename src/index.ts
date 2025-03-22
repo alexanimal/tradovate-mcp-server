@@ -46,7 +46,8 @@ import {
   handleCancelOrder,
   handleLiquidatePosition,
   handleGetAccountSummary,
-  handleGetMarketData
+  handleGetMarketData,
+  handleListOrders
 } from "./tools.js";
 
 /**
@@ -212,6 +213,19 @@ export const server = new Server(
               },
             },
             required: ["symbol", "dataType"],
+          },
+        },
+        list_orders: {
+          description: "Get a list of orders, optionally filtered by account ID",
+          parameters: {
+            type: "object",
+            properties: {
+              accountId: {
+                type: "string",
+                description: "Optional account ID to filter orders by"
+              }
+            },
+            required: []
           },
         },
       },
@@ -501,6 +515,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["symbol", "dataType"],
         },
       },
+      {
+        name: "list_orders",
+        description: "Get a list of orders, optionally filtered by account ID",
+        inputSchema: {
+          type: "object",
+          properties: {
+            accountId: {
+              type: "string",
+              description: "Optional account ID to filter orders by"
+            }
+          },
+          required: []
+        },
+      },
     ],
   };
 });
@@ -534,6 +562,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     
     case "get_market_data":
       return await handleGetMarketData(request);
+    
+    case "list_orders":
+      return await handleListOrders(request);
     
     default:
       throw new Error(`Unknown tool: ${request.params.name}`);
@@ -572,7 +603,7 @@ export async function initialize() {
       } catch (error) {
         logger.error("Error refreshing data:", error);
       }
-    }, 5 * 60 * 1000);
+    }, 60 * 60 * 1000);
   } catch (error) {
     logger.error("Failed to initialize Tradovate MCP server:", error);
     logger.warn("Server will start with mock data fallback");
