@@ -16,13 +16,6 @@ dotenv.config();
 import * as logger from "./logger.js";
 
 // Then import other dependencies
-// First, load environment variables from .env file
-import dotenv from "dotenv";
-dotenv.config();
-
-import * as logger from "./logger.js";
-
-// Then import other dependencies
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -75,7 +68,6 @@ export const server = new Server(
           description: "Current positions in your Tradovate account",
         },
       },
-      prompts: {},
       prompts: {},
       tools: {
         get_contract_details: {
@@ -276,15 +268,6 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   
   const resourceType = match[1];
   const resourceId = match[2] || '';
-  // Handle both tradovate:// protocol scheme and simple tradovate/ format
-  const match = uri.match(/^(?:tradovate:\/\/|tradovate\/)([^\/]+)(?:\/(.*))?$/);
-  
-  if (!match) {
-    throw new Error(`Invalid resource URI: ${uri}`);
-  }
-  
-  const resourceType = match[1];
-  const resourceId = match[2] || '';
   
   if (!resourceType) {
     throw new Error(`Invalid resource URI: ${uri}`);
@@ -302,11 +285,9 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         
         return {
           contents: [
-          contents: [
             {
               type: "application/json",
               text: JSON.stringify(contract),
-              uri: `tradovate://contract/${resourceId}`
               uri: `tradovate://contract/${resourceId}`
             },
           ],
@@ -317,11 +298,9 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         
         return {
           contents: [
-          contents: [
             {
               type: "application/json",
               text: JSON.stringify(contracts),
-              uri: "tradovate://contract/"
               uri: "tradovate://contract/"
             },
           ],
@@ -351,44 +330,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
           logger.error(`Error fetching position ${resourceId}:`, error);
           throw new Error(`Resource not found: ${uri}`);
         }
-        // Return specific position - fetch directly from API
-        try {
-          const position = await tradovateRequest('GET', `position/find?id=${resourceId}`);
-          if (!position) {
-            throw new Error(`Resource not found: ${uri}`);
-          }
-          
-          return {
-            contents: [
-              {
-                type: "application/json",
-                text: JSON.stringify(position),
-                uri: `tradovate://position/${resourceId}`
-              },
-            ],
-          };
-        } catch (error) {
-          logger.error(`Error fetching position ${resourceId}:`, error);
-          throw new Error(`Resource not found: ${uri}`);
-        }
       } else {
-        // Return list of positions - fetch directly from API
-        try {
-          const positions = await tradovateRequest('GET', 'position/list');
-          
-          return {
-            contents: [
-              {
-                type: "application/json",
-                text: JSON.stringify(positions),
-                uri: "tradovate://position/"
-              },
-            ],
-          };
-        } catch (error) {
-          logger.error('Error fetching positions:', error);
-          throw new Error(`Error fetching positions: ${error instanceof Error ? error.message : String(error)}`);
-        }
         // Return list of positions - fetch directly from API
         try {
           const positions = await tradovateRequest('GET', 'position/list');
@@ -432,17 +374,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["symbol"],
-        },
-        inputSchema: {
-          type: "object",
-          properties: {
-            symbol: {
-              type: "string",
-              description: "The contract symbol (e.g., ESZ4, NQZ4)",
-            },
-          },
-          required: ["symbol"],
-        },
+        }
       },
       {
         name: "list_positions",
@@ -455,16 +387,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "The account ID (optional, will use default if not provided)",
             },
           },
-        },
-        inputSchema: {
-          type: "object",
-          properties: {
-            accountId: {
-              type: "string",
-              description: "The account ID (optional, will use default if not provided)",
-            },
-          },
-        },
+        }
       },
       {
         name: "place_order",
@@ -500,39 +423,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["symbol", "action", "orderType", "quantity"],
-        },
-        inputSchema: {
-          type: "object",
-          properties: {
-            symbol: {
-              type: "string",
-              description: "The contract symbol (e.g., ESZ4, NQZ4)",
-            },
-            action: {
-              type: "string",
-              description: "Buy or Sell",
-              enum: ["Buy", "Sell"],
-            },
-            orderType: {
-              type: "string",
-              description: "Type of order",
-              enum: ["Market", "Limit", "Stop", "StopLimit"],
-            },
-            quantity: {
-              type: "number",
-              description: "Number of contracts",
-            },
-            price: {
-              type: "number",
-              description: "Price for Limit and StopLimit orders",
-            },
-            stopPrice: {
-              type: "number",
-              description: "Stop price for Stop and StopLimit orders",
-            },
-          },
-          required: ["symbol", "action", "orderType", "quantity"],
-        },
+        }
       },
       {
         name: "modify_order",
@@ -558,29 +449,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["orderId"],
-        },
-        inputSchema: {
-          type: "object",
-          properties: {
-            orderId: {
-              type: "string",
-              description: "The order ID to modify",
-            },
-            price: {
-              type: "number",
-              description: "New price for Limit and StopLimit orders",
-            },
-            stopPrice: {
-              type: "number",
-              description: "New stop price for Stop and StopLimit orders",
-            },
-            quantity: {
-              type: "number",
-              description: "New quantity",
-            },
-          },
-          required: ["orderId"],
-        },
+        }
       },
       {
         name: "cancel_order",
@@ -594,17 +463,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["orderId"],
-        },
-        inputSchema: {
-          type: "object",
-          properties: {
-            orderId: {
-              type: "string",
-              description: "The order ID to cancel",
-            },
-          },
-          required: ["orderId"],
-        },
+        }
       },
       {
         name: "liquidate_position",
@@ -618,17 +477,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["symbol"],
-        },
-        inputSchema: {
-          type: "object",
-          properties: {
-            symbol: {
-              type: "string",
-              description: "The contract symbol (e.g., ESZ4, NQZ4)",
-            },
-          },
-          required: ["symbol"],
-        },
+        }
       },
       {
         name: "get_account_summary",
@@ -641,16 +490,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "The account ID (optional, will use default if not provided)",
             },
           },
-        },
-        inputSchema: {
-          type: "object",
-          properties: {
-            accountId: {
-              type: "string",
-              description: "The account ID (optional, will use default if not provided)",
-            },
-          },
-        },
+        }
       },
       {
         name: "get_market_data",
