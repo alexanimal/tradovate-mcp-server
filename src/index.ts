@@ -16,6 +16,13 @@ dotenv.config();
 import * as logger from "./logger.js";
 
 // Then import other dependencies
+// First, load environment variables from .env file
+import dotenv from "dotenv";
+dotenv.config();
+
+import * as logger from "./logger.js";
+
+// Then import other dependencies
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -26,6 +33,7 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+
 
 import { fileURLToPath } from "url";
 
@@ -67,6 +75,7 @@ export const server = new Server(
           description: "Current positions in your Tradovate account",
         },
       },
+      prompts: {},
       prompts: {},
       tools: {
         get_contract_details: {
@@ -267,6 +276,15 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   
   const resourceType = match[1];
   const resourceId = match[2] || '';
+  // Handle both tradovate:// protocol scheme and simple tradovate/ format
+  const match = uri.match(/^(?:tradovate:\/\/|tradovate\/)([^\/]+)(?:\/(.*))?$/);
+  
+  if (!match) {
+    throw new Error(`Invalid resource URI: ${uri}`);
+  }
+  
+  const resourceType = match[1];
+  const resourceId = match[2] || '';
   
   if (!resourceType) {
     throw new Error(`Invalid resource URI: ${uri}`);
@@ -284,9 +302,11 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         
         return {
           contents: [
+          contents: [
             {
               type: "application/json",
               text: JSON.stringify(contract),
+              uri: `tradovate://contract/${resourceId}`
               uri: `tradovate://contract/${resourceId}`
             },
           ],
@@ -297,9 +317,11 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         
         return {
           contents: [
+          contents: [
             {
               type: "application/json",
               text: JSON.stringify(contracts),
+              uri: "tradovate://contract/"
               uri: "tradovate://contract/"
             },
           ],
@@ -329,7 +351,44 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
           logger.error(`Error fetching position ${resourceId}:`, error);
           throw new Error(`Resource not found: ${uri}`);
         }
+        // Return specific position - fetch directly from API
+        try {
+          const position = await tradovateRequest('GET', `position/find?id=${resourceId}`);
+          if (!position) {
+            throw new Error(`Resource not found: ${uri}`);
+          }
+          
+          return {
+            contents: [
+              {
+                type: "application/json",
+                text: JSON.stringify(position),
+                uri: `tradovate://position/${resourceId}`
+              },
+            ],
+          };
+        } catch (error) {
+          logger.error(`Error fetching position ${resourceId}:`, error);
+          throw new Error(`Resource not found: ${uri}`);
+        }
       } else {
+        // Return list of positions - fetch directly from API
+        try {
+          const positions = await tradovateRequest('GET', 'position/list');
+          
+          return {
+            contents: [
+              {
+                type: "application/json",
+                text: JSON.stringify(positions),
+                uri: "tradovate://position/"
+              },
+            ],
+          };
+        } catch (error) {
+          logger.error('Error fetching positions:', error);
+          throw new Error(`Error fetching positions: ${error instanceof Error ? error.message : String(error)}`);
+        }
         // Return list of positions - fetch directly from API
         try {
           const positions = await tradovateRequest('GET', 'position/list');
@@ -374,6 +433,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["symbol"],
         },
+        inputSchema: {
+          type: "object",
+          properties: {
+            symbol: {
+              type: "string",
+              description: "The contract symbol (e.g., ESZ4, NQZ4)",
+            },
+          },
+          required: ["symbol"],
+        },
       },
       {
         name: "list_positions",
@@ -387,10 +456,51 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
         },
+        inputSchema: {
+          type: "object",
+          properties: {
+            accountId: {
+              type: "string",
+              description: "The account ID (optional, will use default if not provided)",
+            },
+          },
+        },
       },
       {
         name: "place_order",
         description: "Place a new order",
+        inputSchema: {
+          type: "object",
+          properties: {
+            symbol: {
+              type: "string",
+              description: "The contract symbol (e.g., ESZ4, NQZ4)",
+            },
+            action: {
+              type: "string",
+              description: "Buy or Sell",
+              enum: ["Buy", "Sell"],
+            },
+            orderType: {
+              type: "string",
+              description: "Type of order",
+              enum: ["Market", "Limit", "Stop", "StopLimit"],
+            },
+            quantity: {
+              type: "number",
+              description: "Number of contracts",
+            },
+            price: {
+              type: "number",
+              description: "Price for Limit and StopLimit orders",
+            },
+            stopPrice: {
+              type: "number",
+              description: "Stop price for Stop and StopLimit orders",
+            },
+          },
+          required: ["symbol", "action", "orderType", "quantity"],
+        },
         inputSchema: {
           type: "object",
           properties: {
@@ -449,10 +559,42 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["orderId"],
         },
+        inputSchema: {
+          type: "object",
+          properties: {
+            orderId: {
+              type: "string",
+              description: "The order ID to modify",
+            },
+            price: {
+              type: "number",
+              description: "New price for Limit and StopLimit orders",
+            },
+            stopPrice: {
+              type: "number",
+              description: "New stop price for Stop and StopLimit orders",
+            },
+            quantity: {
+              type: "number",
+              description: "New quantity",
+            },
+          },
+          required: ["orderId"],
+        },
       },
       {
         name: "cancel_order",
         description: "Cancel an existing order",
+        inputSchema: {
+          type: "object",
+          properties: {
+            orderId: {
+              type: "string",
+              description: "The order ID to cancel",
+            },
+          },
+          required: ["orderId"],
+        },
         inputSchema: {
           type: "object",
           properties: {
@@ -477,10 +619,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["symbol"],
         },
+        inputSchema: {
+          type: "object",
+          properties: {
+            symbol: {
+              type: "string",
+              description: "The contract symbol (e.g., ESZ4, NQZ4)",
+            },
+          },
+          required: ["symbol"],
+        },
       },
       {
         name: "get_account_summary",
         description: "Get account summary information",
+        inputSchema: {
+          type: "object",
+          properties: {
+            accountId: {
+              type: "string",
+              description: "The account ID (optional, will use default if not provided)",
+            },
+          },
+        },
         inputSchema: {
           type: "object",
           properties: {
@@ -585,12 +746,26 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 });
 
 /**
+ * Prompt/template handlers for the MCP server
+ */
+server.setRequestHandler(ListPromptsRequestSchema, async () => {
+  return {
+    prompts: [] // No templates/prompts available in this server
+  };
+});
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  throw new Error(`Prompt not found: ${request.params.id}`);
+});
+
+/**
  * Initialize the server by authenticating with Tradovate API
  */
 export async function initialize() {
   try {
     // Authenticate with Tradovate API
     await authenticate();
+    logger.info("Tradovate MCP server initialized successfully");
     logger.info("Tradovate MCP server initialized successfully");
     
     // Initialize data
@@ -602,9 +777,12 @@ export async function initialize() {
         await initializeData();
       } catch (error) {
         logger.error("Error refreshing data:", error);
+        logger.error("Error refreshing data:", error);
       }
     }, 60 * 60 * 1000);
   } catch (error) {
+    logger.error("Failed to initialize Tradovate MCP server:", error);
+    logger.warn("Server will start with mock data fallback");
     logger.error("Failed to initialize Tradovate MCP server:", error);
     logger.warn("Server will start with mock data fallback");
   }
@@ -630,6 +808,7 @@ if (!isTestEnvironment) {
   const isMainModule = process.argv.length > 1 && process.argv[1].includes('index');
   if (isMainModule) {
     main().catch((error) => {
+      logger.error("Server error:", error);
       logger.error("Server error:", error);
       process.exit(1);
     });
