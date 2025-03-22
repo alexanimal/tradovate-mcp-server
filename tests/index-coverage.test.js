@@ -161,7 +161,7 @@ describe('Index Module Additional Coverage', () => {
       // Assert
       expect(result).toHaveProperty('tools');
       expect(Array.isArray(result.tools)).toBe(true);
-      expect(result.tools.length).toBe(8); // Check that all 8 tools are returned
+      expect(result.tools.length).toBe(9); // Check that all 8 tools are returned
       
       // Check for specific tools
       const toolNames = result.tools.map(tool => tool.name);
@@ -173,6 +173,7 @@ describe('Index Module Additional Coverage', () => {
       expect(toolNames).toContain('liquidate_position');
       expect(toolNames).toContain('get_account_summary');
       expect(toolNames).toContain('get_market_data');
+      expect(toolNames).toContain('list_orders');
       
       // Check that each tool has a description
       result.tools.forEach(tool => {
