@@ -144,14 +144,21 @@ describe('Connect Module Tests', () => {
   });
 
   describe('query function', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+    
+    afterEach(() => {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    });
+    
     test('should send message and resolve with response', async () => {
       const sendSpy = jest.spyOn(mockWs, 'send');
       const queryPromise = query(mockWs, 'test/endpoint', { data: 'test' });
       
-      // Simulate response
-      setTimeout(() => {
-        mockWs.emit('message', JSON.stringify({ success: true }));
-      }, 100);
+      // Use jest timer instead of real setTimeout
+      mockWs.emit('message', JSON.stringify({ success: true }));
       
       const result = await queryPromise;
       
@@ -164,10 +171,8 @@ describe('Connect Module Tests', () => {
       const sendSpy = jest.spyOn(mockWs, 'send');
       const queryPromise = query(mockWs, 'test/endpoint');
       
-      // Simulate response
-      setTimeout(() => {
-        mockWs.emit('message', JSON.stringify({ success: true }));
-      }, 100);
+      // Use jest timer instead of real setTimeout
+      mockWs.emit('message', JSON.stringify({ success: true }));
       
       const result = await queryPromise;
       
@@ -178,10 +183,8 @@ describe('Connect Module Tests', () => {
     test('should handle non-JSON responses', async () => {
       const queryPromise = query(mockWs, 'test/endpoint');
       
-      // Simulate non-JSON response
-      setTimeout(() => {
-        mockWs.emit('message', 'non-json-response');
-      }, 100);
+      // Use jest timer instead of real setTimeout
+      mockWs.emit('message', 'non-json-response');
       
       const result = await queryPromise;
       
@@ -206,16 +209,12 @@ describe('Connect Module Tests', () => {
     });
 
     test('should reject on timeout', async () => {
-      jest.useFakeTimers();
-      
       const queryPromise = query(mockWs, 'test/endpoint');
       
       // Fast-forward time to trigger timeout
       jest.advanceTimersByTime(11000);
       
       await expect(queryPromise).rejects.toThrow('Request to test/endpoint timed out after 10 seconds');
-      
-      jest.useRealTimers();
     });
 
     test('should handle error in sending message', async () => {

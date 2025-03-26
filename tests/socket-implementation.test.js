@@ -30,6 +30,9 @@ const { TradovateSocket } = socketModule;
 const MD_URL = 'wss://md-demo.tradovateapi.com/v1/websocket';
 const WS_DEMO_URL = 'wss://demo.tradovateapi.com/v1/websocket';
 
+// Store active sockets for cleanup
+const activeSockets = new Set();
+
 describe('Socket Implementation Tests', () => {
   let socket;
   let mockWs;
@@ -37,24 +40,65 @@ describe('Socket Implementation Tests', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     WebSocketMock.cleanup();
+    
+    // Create a new socket instance
     socket = new TradovateSocket({ debugLabel: 'test-socket' });
+    activeSockets.add(socket);
+    
+    // Monkey patch the socket's connect method to cleanup timeouts
+    const originalConnect = socket.connect;
+    socket.connect = function(...args) {
+      try {
+        return originalConnect.apply(this, args);
+      } catch (e) {
+        // If connect throws, we still want to cleanup
+        if (this.ws) {
+          this.ws.close();
+          this.ws = null;
+        }
+        throw e;
+      }
+    };
   });
   
   afterEach(() => {
     try {
+      // Clear mock WebSocket instances 
       WebSocketMock.cleanup();
       
-      // Ensure we don't try to close the socket if it's already being closed
-      if (socket.isConnected && socket.isConnected()) {
-        socket.close = jest.fn(); // Replace close with a mock to avoid actual closure
-      }
+      // Close any sockets we may have created
+      activeSockets.forEach(s => {
+        try {
+          if (s && typeof s.close === 'function') {
+            // Replace close with a mock to avoid actual network actions
+            if (s.isConnected && s.isConnected()) {
+              s.close = jest.fn();
+              s.close();
+            }
+          }
+        } catch (e) {
+          // Ignore errors during cleanup
+        }
+      });
+      
+      // Clear active sockets
+      activeSockets.clear();
+      
+      // Reset socket
+      socket = null;
+      mockWs = null;
     } finally {
+      // Reset all mocks and timers
       jest.clearAllMocks();
+      if (jest.isMockFunction(setTimeout)) {
+        jest.clearAllTimers();
+      }
     }
   });
   
   afterAll(() => {
     WebSocketMock.cleanup();
+    activeSockets.clear();
     jest.useRealTimers();
   });
   
@@ -119,6 +163,7 @@ describe('Socket Implementation Tests', () => {
   });
   
   test('should handle connection timeout', async () => {
+    // Use fake timers for this test
     jest.useFakeTimers();
     
     // Mock setTimeout to avoid actual waiting
@@ -127,10 +172,15 @@ describe('Socket Implementation Tests', () => {
     // Fast-forward time to trigger timeout
     jest.advanceTimersByTime(31000);
     
-    await expect(connectPromise).rejects.toThrow('Connection timeout');
-    expect(socket.isConnected()).toBe(false);
-    
-    jest.useRealTimers();
+    // Use try/finally to ensure timers are reset
+    try {
+      await expect(connectPromise).rejects.toThrow('Connection timeout');
+      expect(socket.isConnected()).toBe(false);
+    } finally {
+      // Be sure to clear all timers to prevent leaks
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
   });
   
   test('should handle authentication failure', async () => {

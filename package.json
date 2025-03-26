@@ -12,6 +12,7 @@
     "build"
   ],
   "scripts": {
+    "start": "node build/src/index.js",
     "build": "tsc && node -e \"require('fs').chmodSync('build/src/index.js', '755')\"",
     "prepare": "npm run build",
     "watch": "tsc --watch",
@@ -19,7 +20,10 @@
     "test": "jest --config jest.config.cjs --coverage --testTimeout=5000 --detectOpenHandles",
     "test:watch": "jest --config jest.config.cjs --watch",
     "test:coverage": "jest --config jest.config.cjs --coverage --testTimeout=5000 --detectOpenHandles",
-    "start": "node build/src/index.js"
+    "test:ci": "NODE_ENV=ci jest --config jest.config.cjs --coverage --testTimeout=5000 --detectOpenHandles",
+    "test:fast": "jest --config jest.config.cjs --testTimeout=5000 --detectOpenHandles=false --detectLeaks=false --forceExit",
+    "test:socket": "jest --config jest.config.cjs --testMatch=\"**/tests/socket-*.test.js\" --testTimeout=5000 --detectOpenHandles=false --detectLeaks=false --forceExit",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "0.6.0",

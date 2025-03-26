@@ -30,4 +30,72 @@ global.console = {
   error: jest.fn(),
   warn: jest.fn(),
   info: jest.fn(),
-}; 
+};
+
+import type { Config } from '@jest/types';
+import { defaults } from 'jest-config';
+
+// This file is configured in jest.config.cjs to run before and after tests
+// Can be customized to handle various test setup and teardown tasks
+
+// Track unhandled rejections during tests
+const unhandledRejections: Error[] = [];
+
+/**
+ * Set up global handlers for unhandled rejections and uncaught exceptions
+ */
+export const setup = () => {
+  // Set up handler for unhandled promise rejections
+  process.on('unhandledRejection', (reason) => {
+    console.warn('Unhandled promise rejection during tests:', reason);
+    if (reason instanceof Error) {
+      unhandledRejections.push(reason);
+    } else {
+      unhandledRejections.push(new Error(String(reason)));
+    }
+  });
+
+  // Before each test, ensure all timers are reset
+  beforeEach(() => {
+    // Reset any fake timers if they exist
+    if (jest.isMockFunction(setTimeout)) {
+      jest.clearAllTimers();
+    }
+    
+    // Clear mocks before each test
+    jest.clearAllMocks();
+  });
+
+  // After each test, fail if there were unhandled rejections during the test
+  afterEach(() => {
+    // Clear any fake timers that might have been set up
+    if (jest.isMockFunction(setTimeout)) {
+      try {
+        jest.useRealTimers();
+      } catch (e) {
+        // May already be using real timers
+      }
+    }
+    
+    if (unhandledRejections.length > 0) {
+      const rejection = unhandledRejections.pop();
+      unhandledRejections.length = 0; // clear the array
+      
+      // Fail the test with the unhandled rejection
+      throw new Error(`Unhandled promise rejection: ${rejection}`);
+    }
+  });
+  
+  // Ensure jest test environment is properly cleaned up
+  afterAll(() => {
+    jest.restoreAllMocks();
+    
+    // Final check for any unhandled rejections
+    if (unhandledRejections.length > 0) {
+      console.error('Unhandled rejections remained after tests:', unhandledRejections);
+      unhandledRejections.length = 0;
+    }
+  });
+};
+
+export default setup; 
