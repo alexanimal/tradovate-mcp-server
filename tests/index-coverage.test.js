@@ -161,7 +161,7 @@ describe('Index Module Additional Coverage', () => {
       // Assert
       expect(result).toHaveProperty('tools');
       expect(Array.isArray(result.tools)).toBe(true);
-      expect(result.tools.length).toBe(9); // Check that all 8 tools are returned
+      expect(result.tools.length).toBe(12); // Check that all 8 tools are returned
       
       // Check for specific tools
       const toolNames = result.tools.map(tool => tool.name);
@@ -350,7 +350,7 @@ describe('Index Module Additional Coverage', () => {
       };
       
       // Assert
-      await expect(handler(request)).rejects.toThrow('Unknown tool: unknown_tool');
+      await expect(handler(request)).rejects.toThrow('Tool not found: unknown_tool');
     });
   });
   

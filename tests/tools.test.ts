@@ -216,7 +216,7 @@ describe('Tool Handlers', () => {
       // Assert
       expect(mockTradovateRequest).toHaveBeenCalledWith('GET', 'contract/find?name=ESZ4');
       expect(mockTradovateRequest).toHaveBeenCalledWith('GET', 'account/list');
-      expect(mockTradovateRequest).toHaveBeenCalledWith('POST', 'order/placeOrder', expect.objectContaining({
+      expect(mockTradovateRequest).toHaveBeenCalledWith('POST', 'order/placeorder', expect.objectContaining({
         price: 5000
       }));
     });

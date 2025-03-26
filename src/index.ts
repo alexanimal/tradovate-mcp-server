@@ -48,7 +48,10 @@ import {
   handleLiquidatePosition,
   handleGetAccountSummary,
   handleGetMarketData,
-  handleListOrders
+  handleListOrders,
+  handleListProducts,
+  handleListExchanges,
+  handleFindProduct
 } from "./tools.js";
 import { connect } from "./connect.js";
 import { getTradovateMdApiUrl } from "./auth.js";
@@ -238,16 +241,51 @@ export const server = new Server(
           },
         },
         list_orders: {
-          description: "Get a list of orders, optionally filtered by account ID",
+          description: "List orders for an account",
           parameters: {
             type: "object",
             properties: {
               accountId: {
                 type: "string",
-                description: "Optional account ID to filter orders by"
-              }
+                description: "The account ID (optional, will use default if not provided)",
+              },
+              status: {
+                type: "string",
+                description: "Filter orders by status (e.g., 'Working', 'Completed', 'Canceled')",
+              },
             },
-            required: []
+          },
+        },
+        list_products: {
+          description: "List available products or get a specific product by contractId",
+          parameters: {
+            type: "object",
+            properties: {
+              contractId: {
+                type: "string",
+                description: "The contract ID to filter by (optional, will return all products if not provided)",
+              },
+            },
+          },
+        },
+        list_exchanges: {
+          description: "List available exchanges from Tradovate",
+          parameters: {
+            type: "object",
+            properties: {},
+          },
+        },
+        find_product: {
+          description: "Find a specific product by name",
+          parameters: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+                description: "The product name to search for",
+              },
+            },
+            required: ["name"],
           },
         },
       },
@@ -539,16 +577,54 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "list_orders",
-        description: "Get a list of orders, optionally filtered by account ID",
+        description: "List orders for an account",
         inputSchema: {
           type: "object",
           properties: {
             accountId: {
               type: "string",
-              description: "Optional account ID to filter orders by"
-            }
+              description: "The account ID (optional, will use default if not provided)",
+            },
+            status: {
+              type: "string",
+              description: "Filter orders by status (e.g., 'Working', 'Completed', 'Canceled')",
+            },
           },
-          required: []
+        },
+      },
+      {
+        name: "list_products",
+        description: "List available products or get a specific product by contractId",
+        inputSchema: {
+          type: "object",
+          properties: {
+            contractId: {
+              type: "string",
+              description: "The contract ID to filter by (optional, will return all products if not provided)",
+            },
+          },
+        },
+      },
+      {
+        name: "list_exchanges",
+        description: "List available exchanges from Tradovate",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "find_product",
+        description: "Find a specific product by name",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "The product name to search for",
+            },
+          },
+          required: ["name"],
         },
       },
     ],
@@ -589,8 +665,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "list_orders":
       return await handleListOrders(request);
     
+    case "list_products":
+      return await handleListProducts(request);
+    
+    case "list_exchanges":
+      return await handleListExchanges(request);
+    
+    case "find_product":
+      return await handleFindProduct(request);
+    
     default:
-      throw new Error(`Unknown tool: ${request.params.name}`);
+      throw new Error(`Tool not found: ${request.params.name}`);
   }
 });
 

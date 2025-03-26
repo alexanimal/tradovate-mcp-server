@@ -137,7 +137,7 @@ export async function handlePlaceOrder(request: any) {
   const quantity = Number(request.params.arguments?.quantity);
   const price = request.params.arguments?.price ? Number(request.params.arguments.price) : undefined;
   const stopPrice = request.params.arguments?.stopPrice ? Number(request.params.arguments.stopPrice) : undefined;
-
+  logger.info(`Placing order for ${symbol} with action ${action}, orderType ${orderType}, quantity ${quantity}, price ${price}, stopPrice ${stopPrice}`);
   if (!symbol || !action || !orderType || !quantity) {
     throw new Error("Symbol, action, orderType, and quantity are required");
   }
@@ -174,17 +174,19 @@ export async function handlePlaceOrder(request: any) {
 
     // Prepare order data
     const orderData = {
-      accountId,
-      contractId: contract.id,
+      accountSpec: process.env.TRADOVATE_USERNAME,
+      accountId: accountId,
       action,
+      symbol,
       orderQty: quantity,
       orderType,
       price,
-      stopPrice
+      stopPrice,
+      isAutomated: true
     };
 
     // Place order via API
-    const newOrder = await tradovateRequest('POST', 'order/placeOrder', orderData);
+    const newOrder = await tradovateRequest('POST', 'order/placeorder', orderData);
 
     // Update orders cache
     ordersCache[newOrder.id.toString()] = newOrder;
@@ -354,9 +356,23 @@ export async function handleCancelOrder(request: any) {
         }]
       };
     }
+    /**
+     {
+        "orderId": 0,
+        "clOrdId": "string",
+        "activationTime": "2019-08-24T14:15:22Z",
+        "customTag50": "string",
+        "isAutomated": true
+      }
+     */
+    const body = {
+      orderId: parseInt(orderId),
+      clOrdId: orderId,
+      isAutomated: true
+    }
 
     // Cancel order via API
-    const canceledOrder = await tradovateRequest('POST', 'order/cancelOrder', { orderId: parseInt(orderId) });
+    const canceledOrder = await tradovateRequest('POST', 'order/cancelorder', body);
 
     // Update orders cache
     ordersCache[orderId] = canceledOrder;
@@ -429,11 +445,21 @@ export async function handleLiquidatePosition(request: any) {
         }]
       };
     }
-
+    /*
+      {
+        "accountId": 0,
+        "contractId": 0,
+        "admin": true,
+        "customTag50": "string"
+      }
+          
+    */
     // Liquidate position via API
-    const liquidationResult = await tradovateRequest('POST', 'order/liquidatePosition', { 
+    const liquidationResult = await tradovateRequest('POST', 'order/liquidateposition', { 
       accountId: position.accountId,
-      contractId: position.contractId
+      contractId: position.contractId,
+      admin: false,
+      customTag50: "MCPserver"
     });
 
     return {
@@ -473,9 +499,11 @@ export async function handleLiquidatePosition(request: any) {
       }
 
       // Liquidate position via API (retry)
-      const liquidationResult = await tradovateRequest('POST', 'order/liquidatePosition', { 
+      const liquidationResult = await tradovateRequest('POST', 'order/liquidateposition', { 
         accountId: position.accountId,
-        contractId: position.contractId
+        contractId: position.contractId,
+        admin: false,
+        customTag50: "MCPserver"
       });
 
       return {
@@ -1068,5 +1096,142 @@ export async function handleListOrders(request: any) {
         }]
       };
     }
+  }
+}
+
+/**
+ * Handle list_products tool
+ */
+export async function handleListProducts(request: any) {
+  const contractId = request.params.arguments?.contractId;
+  
+  try {
+    // Fetch products from API
+    const productList = await tradovateRequest('GET', 'product/list');
+    
+    if (!productList || !Array.isArray(productList) || productList.length === 0) {
+      return {
+        content: [{
+          type: "text",
+          text: "No products found"
+        }]
+      };
+    }
+
+    // If contractId is provided, filter the list
+    if (contractId) {
+      const product = productList.find(p => p.id === Number(contractId));
+      
+      if (!product) {
+        return {
+          content: [{
+            type: "text",
+            text: `Product not found with contractId: ${contractId}`
+          }]
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `Product for contractId ${contractId}:\n${JSON.stringify(product, null, 2)}`
+        }]
+      };
+    }
+
+    // Return the full list
+    return {
+      content: [{
+        type: "text",
+        text: `Available products:\n${JSON.stringify(productList, null, 2)}`
+      }]
+    };
+  } catch (error) {
+    logger.error("Error fetching products:", error);
+    
+    return {
+      content: [{
+        type: "text",
+        text: `Error fetching products: ${error instanceof Error ? error.message : String(error)}`
+      }]
+    };
+  }
+}
+
+/**
+ * Handle list_exchanges tool
+ */
+export async function handleListExchanges(request: any) {
+  
+  try {
+    // Fetch exchanges from API
+    const exchangeList = await tradovateRequest('GET', 'exchange/list');
+    
+    if (!exchangeList || !Array.isArray(exchangeList) || exchangeList.length === 0) {
+      return {
+        content: [{
+          type: "text",
+          text: "No exchanges found"
+        }]
+      };
+    }
+
+    // Return the full list
+    return {
+      content: [{
+        type: "text",
+        text: `Available exchanges:\n${JSON.stringify(exchangeList, null, 2)}`
+      }]
+    };
+  } catch (error) {
+    logger.error("Error fetching exchanges:", error);
+    
+    return {
+      content: [{
+        type: "text",
+        text: `Error fetching exchanges: ${error instanceof Error ? error.message : String(error)}`
+      }]
+    };
+  }
+}
+
+/**
+ * Handle find_product tool
+ */
+export async function handleFindProduct(request: any) {
+  const name = String(request.params.arguments?.name);
+  
+  if (!name) {
+    throw new Error("Product name is required");
+  }
+  
+  try {
+    // Find product by name
+    const product = await tradovateRequest('GET', `product/find?name=${name}`);
+    
+    if (!product) {
+      return {
+        content: [{
+          type: "text",
+          text: `Product not found with name: ${name}`
+        }]
+      };
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: `Product details for ${name}:\n${JSON.stringify(product, null, 2)}`
+      }]
+    };
+  } catch (error) {
+    logger.error(`Error finding product with name ${name}:`, error);
+    
+    return {
+      content: [{
+        type: "text",
+        text: `Error finding product: ${error instanceof Error ? error.message : String(error)}`
+      }]
+    };
   }
 } 

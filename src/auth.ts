@@ -190,7 +190,10 @@ export async function authenticate(): Promise<string> {
 export async function tradovateRequest(method: string, endpoint: string, data?: any, isMarketData: boolean = false): Promise<any> {
   const token = await authenticate();
   const baseUrl = isMarketData ? getTradovateMdApiUrl() : getTradovateApiUrl();
-  logger.info(`Making request to ${baseUrl}/${endpoint}`);
+  logger.info(`Making a ${method} request to ${baseUrl}/${endpoint}`);
+  if (data) {
+    logger.info(`Data: ${JSON.stringify(data, null, 2)}`);
+  }
   try {
     const response = await axios({
       method,
