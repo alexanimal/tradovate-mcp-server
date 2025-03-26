@@ -141,7 +141,7 @@ describe('Additional Tool Handlers', () => {
 
       // Assert
       expect(auth.tradovateRequest).toHaveBeenCalledWith('GET', 'order/find?id=1');
-      expect(auth.tradovateRequest).toHaveBeenCalledWith('POST', 'order/cancelOrder', expect.objectContaining({
+      expect(auth.tradovateRequest).toHaveBeenCalledWith('POST', 'order/cancelorder', expect.objectContaining({
         orderId: 1
       }));
       expect(result.content[0].text).toContain('Order canceled successfully');

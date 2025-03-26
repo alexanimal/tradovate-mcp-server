@@ -78,7 +78,7 @@ describe('Additional Tool Handlers for Coverage', () => {
       // Assert
       expect(auth.tradovateRequest).toHaveBeenCalledWith('GET', 'contract/find?name=ESZ4');
       expect(auth.tradovateRequest).toHaveBeenCalledWith('GET', 'position/list');
-      expect(auth.tradovateRequest).toHaveBeenCalledWith('POST', 'order/liquidatePosition', expect.objectContaining({
+      expect(auth.tradovateRequest).toHaveBeenCalledWith('POST', 'order/liquidateposition', expect.objectContaining({
         accountId: 12345,
         contractId: 1
       }));
