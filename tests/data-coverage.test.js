@@ -24,7 +24,8 @@ describe('Data Module Coverage Tests', () => {
     // Enable data coverage testing
     process.env.TESTING_DATA_COVERAGE = 'true';
     
-    // Spy on console methods to prevent actual logging
+    // Properly mock console methods to prevent actual logging
+    // Using mockImplementation instead of mockRestore to ensure the mock works properly
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -32,6 +33,11 @@ describe('Data Module Coverage Tests', () => {
   
   // Add afterEach to clean up
   afterEach(() => {
+    // Restore console functions
+    console.log.mockRestore();
+    console.warn.mockRestore();
+    console.error.mockRestore();
+    
     // Clean up environment variables
     delete process.env.TESTING_DATA_COVERAGE;
     delete process.env.TESTING_CONTRACTS_BEHAVIOR;
@@ -48,12 +54,14 @@ describe('Data Module Coverage Tests', () => {
         { id: 1, name: 'ESZ4', description: 'E-mini S&P 500' },
         { id: 2, name: 'NQZ4', description: 'E-mini NASDAQ-100' }
       ];
-      // No need to mock - helper will handle this
+      
+      // Mock the tradovateRequest directly instead of using helper
+      tradovateRequest.mockResolvedValueOnce(mockContracts);
       
       // Act
       const result = await data.fetchContracts();
       
-      // Assert - removed tradovateRequest check
+      // Assert
       expect(result).toEqual({
         '1': mockContracts[0],
         '2': mockContracts[1]
@@ -83,7 +91,7 @@ describe('Data Module Coverage Tests', () => {
       // Act
       const result = await data.fetchContracts();
       
-      // Assert - removed tradovateRequest check
+      // Assert
       expect(console.error).toHaveBeenCalled();
       expect(result).toEqual({});
     });
@@ -99,7 +107,7 @@ describe('Data Module Coverage Tests', () => {
       // Act
       const result = await data.fetchContracts();
       
-      // Assert - removed tradovateRequest check
+      // Assert
       expect(console.error).toHaveBeenCalled();
       expect(result).toEqual(cachedContracts);
     });

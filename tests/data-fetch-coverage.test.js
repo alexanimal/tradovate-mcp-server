@@ -2,13 +2,9 @@ const { describe, expect, test, beforeEach, afterEach } = require('@jest/globals
 
 // Import the data module through our helper
 const data = require('./data-helper.js');
+const auth = require('./auth-helper.js');
 
 describe('Data Module Fetch Functions Coverage Tests', () => {
-  // Store original console methods
-  const originalConsoleLog = console.log;
-  const originalConsoleWarn = console.warn;
-  const originalConsoleError = console.error;
-  
   beforeEach(() => {
     // Set environment variable to indicate which test file is running
     process.env.TESTING_DATA_FETCH_COVERAGE = 'true';
@@ -19,21 +15,21 @@ describe('Data Module Fetch Functions Coverage Tests', () => {
     data.ordersCache = {};
     data.accountsCache = {};
     
-    // Mock console methods to prevent actual logging during tests
-    console.log = jest.fn();
-    console.warn = jest.fn();
-    console.error = jest.fn();
+    // Properly mock console methods to prevent actual logging
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
   });
   
   afterEach(() => {
+    // Restore console functions
+    console.log.mockRestore();
+    console.warn.mockRestore();
+    console.error.mockRestore();
+    
     // Clear environment variables
     delete process.env.TESTING_DATA_FETCH_COVERAGE;
     delete process.env.TESTING_FETCH_BEHAVIOR;
-    
-    // Restore original console methods
-    console.log = originalConsoleLog;
-    console.warn = originalConsoleWarn;
-    console.error = originalConsoleError;
   });
   
   describe('fetchContracts function', () => {
@@ -44,6 +40,9 @@ describe('Data Module Fetch Functions Coverage Tests', () => {
         { id: 1, name: 'ESZ4' },
         { id: 2, name: 'NQZ4' }
       ];
+      
+      // Mock tradovateRequest directly
+      jest.spyOn(auth, 'tradovateRequest').mockResolvedValueOnce(mockContracts);
       
       // Act
       const result = await data.fetchContracts();
@@ -60,6 +59,12 @@ describe('Data Module Fetch Functions Coverage Tests', () => {
       // Arrange
       process.env.TESTING_FETCH_BEHAVIOR = 'contracts_error';
       
+      // Mock error
+      jest.spyOn(auth, 'tradovateRequest').mockImplementation(() => {
+        console.error('Error fetching contracts:', new Error('API error'));
+        throw new Error('API error');
+      });
+      
       // Act
       const result = await data.fetchContracts();
       
@@ -75,6 +80,12 @@ describe('Data Module Fetch Functions Coverage Tests', () => {
         '999': { id: 999, name: 'Cached Contract' }
       };
       data.contractsCache = existingCache;
+      
+      // Mock error
+      jest.spyOn(auth, 'tradovateRequest').mockImplementation(() => {
+        console.error('Error fetching contracts:', new Error('API error'));
+        throw new Error('API error');
+      });
       
       // Act
       const result = await data.fetchContracts();
