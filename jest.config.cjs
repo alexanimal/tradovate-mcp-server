@@ -35,9 +35,26 @@ module.exports = {
     },
   },
   setupFilesAfterEnv: ['<rootDir>/jest.setup.cjs'],
+  globalSetup: '<rootDir>/tests/global-setup.cjs',
+  globalTeardown: '<rootDir>/tests/global-teardown.cjs',
   verbose: true,
   testTimeout: 30000,
   logHeapUsage: true,
-  detectLeaks: false,
-  detectOpenHandles: false,
+  
+  // Configure memory leak and open handle detection based on NODE_ENV
+  detectLeaks: process.env.NODE_ENV === 'ci' ? true : false,
+  detectOpenHandles: process.env.NODE_ENV === 'ci' ? true : false,
+  
+  // Force exit to ensure process terminates in dev environment
+  forceExit: process.env.NODE_ENV !== 'ci',
+  
+  // Use jest-circus for better async handling
+  testRunner: 'jest-circus/runner',
+  
+  // Ignore certain patterns in socket tests that are known to cause issues
+  watchPathIgnorePatterns: [
+    '<rootDir>/node_modules/',
+    '<rootDir>/coverage/',
+    '<rootDir>/tests/socket-implementation.test.js'
+  ]
 }; 

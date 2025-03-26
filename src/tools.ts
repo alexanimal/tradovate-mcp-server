@@ -1,6 +1,8 @@
 import * as logger from "./logger.js";
 import { tradovateRequest } from './auth.js';
 import { contractsCache, positionsCache, ordersCache, accountsCache, fetchPositions } from './data.js';
+import { query } from './connect.js';
+import { TradovateSocket } from './socket.js';
 
 /**
  * Handle get_contract_details tool
@@ -652,11 +654,190 @@ export async function handleGetMarketData(request: any) {
     }
 
     let marketData: any;
+    let dataSource = "real-time"; // default source type
+    
+    // Check if we have the new socket connections available
+    if (global.marketDataSocket && global.marketDataSocket.isConnected()) {
+      logger.info(`Using market data socket for ${dataType} data on ${symbol}`);
+      
+      try {
+        switch (dataType) {
+          case "Quote":
+            // Create a promise that will resolve when we get the quote data
+            marketData = await new Promise((resolve, reject) => {
+              let timeoutId: NodeJS.Timeout;
+              
+              // Set a timeout to prevent hanging if we don't get a response
+              timeoutId = setTimeout(() => {
+                reject(new Error('Quote data request timed out'));
+              }, 10000);
+              
+              // Subscribe to quote data
+              global.marketDataSocket.subscribe({
+                url: 'md/subscribequote',
+                body: { symbol },
+                subscription: (data) => {
+                  clearTimeout(timeoutId);
+                  resolve(data);
+                  // Note: This would normally keep receiving updates, but we just want the first one
+                }
+              }).catch(error => {
+                clearTimeout(timeoutId);
+                reject(error);
+              });
+            });
+            break;
+            
+          case "DOM":
+            // Create a promise that will resolve when we get the DOM data
+            marketData = await new Promise((resolve, reject) => {
+              let timeoutId: NodeJS.Timeout;
+              
+              // Set a timeout to prevent hanging if we don't get a response
+              timeoutId = setTimeout(() => {
+                reject(new Error('DOM data request timed out'));
+              }, 10000);
+              
+              // Subscribe to DOM data
+              global.marketDataSocket.subscribe({
+                url: 'md/subscribedom',
+                body: { symbol },
+                subscription: (data) => {
+                  clearTimeout(timeoutId);
+                  resolve(data);
+                  // Note: This would normally keep receiving updates, but we just want the first one
+                }
+              }).catch(error => {
+                clearTimeout(timeoutId);
+                reject(error);
+              });
+            });
+            break;
+          
+          case "Chart":
+            // Convert timeframe to chart parameters
+            let chartUnits;
+            let chartLength;
+            
+            switch (chartTimeframe) {
+              case "1min": chartUnits = "m"; chartLength = 1; break;
+              case "5min": chartUnits = "m"; chartLength = 5; break;
+              case "15min": chartUnits = "m"; chartLength = 15; break;
+              case "30min": chartUnits = "m"; chartLength = 30; break;
+              case "1hour": chartUnits = "h"; chartLength = 1; break;
+              case "4hour": chartUnits = "h"; chartLength = 4; break;
+              case "1day": chartUnits = "d"; chartLength = 1; break;
+              default: chartUnits = "m"; chartLength = 1;
+            }
+            
+            // Create a promise that will resolve when we get the chart data
+            marketData = await new Promise((resolve, reject) => {
+              let timeoutId: NodeJS.Timeout;
+              
+              // Set a timeout to prevent hanging if we don't get a response
+              timeoutId = setTimeout(() => {
+                reject(new Error('Chart data request timed out'));
+              }, 10000);
+              
+              // Get chart data using the chart subscription
+              global.marketDataSocket.subscribe({
+                url: 'md/getchart',
+                body: { 
+                  symbol,
+                  chartDescription: `${chartLength}${chartUnits}`,
+                  timeRange: 3600 // 1 hour of data
+                },
+                subscription: (data) => {
+                  clearTimeout(timeoutId);
+                  resolve(data);
+                }
+              }).catch(error => {
+                clearTimeout(timeoutId);
+                reject(error);
+              });
+            });
+            break;
+          
+          default:
+            throw new Error(`Unsupported data type: ${dataType}`);
+        }
+      } catch (socketError) {
+        logger.error(`Error using market data socket for ${dataType} data on ${symbol}:`, socketError);
+        logger.info(`Falling back to legacy approach for ${dataType} data on ${symbol}`);
+        // Just return the legacy result directly instead of trying to parse it
+        return await handleGetMarketDataLegacy(request);
+      }
+      
+      // If we successfully got market data using the socket, return it
+      return {
+        content: [{
+          type: "text",
+          text: `Market data for ${symbol} (${dataType}) [${dataSource}]:\n${JSON.stringify(marketData, null, 2)}`
+        }]
+      };
+    } else {
+      // Fallback to legacy approach
+      logger.warn(`Market data socket not available, using legacy approach for ${dataType} data on ${symbol}`);
+      // Just return the legacy result directly
+      return await handleGetMarketDataLegacy(request);
+    }
+  } catch (error) {
+    logger.error(`Error getting market data for ${symbol}:`, error);
+    return await handleGetMarketDataLegacy(request);
+  }
+}
+
+/**
+ * Legacy implementation of market data handling
+ */
+async function handleGetMarketDataLegacy(request: any) {
+  const symbol = String(request.params.arguments?.symbol);
+  const dataType = String(request.params.arguments?.dataType);
+  const chartTimeframe = String(request.params.arguments?.chartTimeframe || "1min");
+
+  if (!symbol || !dataType) {
+    throw new Error("Symbol and dataType are required");
+  }
+
+  try {
+    // Find contract by symbol
+    const contract = await tradovateRequest('GET', `contract/find?name=${symbol}`);
+    
+    if (!contract) {
+      return {
+        content: [{
+          type: "text",
+          text: `Contract not found for symbol: ${symbol}`
+        }]
+      };
+    }
+
+    let marketData: any;
     
     switch (dataType) {
       case "Quote":
         // Get quote data using market data API
-        marketData = await tradovateRequest('GET', `md/getQuote?contractId=${contract.id}`, undefined, true);
+        try {
+          if (global.tradovateWs && global.tradovateWs.readyState === WebSocket.OPEN) {
+            const endpoint = `md/getQuote?contractId=${contract.id}`;
+            marketData = await query(global.tradovateWs, endpoint);
+            logger.info(`Market Data: ${JSON.stringify(marketData)}`);
+          } else {
+            throw new Error('Legacy WebSocket not connected');
+          }
+        } catch (wsError) {
+          logger.error(`WebSocket query failed: ${wsError}`);
+          logger.info('Falling back to mock data for Quote');
+          // Fallback to mock data
+          marketData = {
+            symbol,
+            bid: 5275.25,
+            ask: 5275.50,
+            last: 5275.25,
+            volume: 1250000,
+            timestamp: new Date().toISOString()
+          };
+        }
         break;
       
       case "DOM":

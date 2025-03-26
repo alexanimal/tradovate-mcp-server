@@ -1,6 +1,7 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
 import * as logger from "./logger.js";
+import WebSocket from 'ws';
 // Load environment variables at module scope
 dotenv.config();
 
@@ -171,7 +172,7 @@ export async function authenticate(): Promise<string> {
         accessTokenExpiry = Date.now() + (24 * 60 * 60 * 1000);
       }
       
-      logger.info('Successfully authenticated with Tradovate API');
+      logger.info('Successfully fetched access token');
       return response.data.accessToken;
     } else {
       throw new Error('Authentication response did not contain an access token');
@@ -184,6 +185,7 @@ export async function authenticate(): Promise<string> {
 
 /**
  * Make an authenticated request to the Tradovate API
+ * For market data requests, uses WebSocket connection
  */
 export async function tradovateRequest(method: string, endpoint: string, data?: any, isMarketData: boolean = false): Promise<any> {
   const token = await authenticate();
@@ -199,13 +201,13 @@ export async function tradovateRequest(method: string, endpoint: string, data?: 
       },
       data
     });
-    logger.info(`${baseUrl}/${endpoint}: ${JSON.stringify(response.data)}`);
+    logger.info(`${baseUrl}/${endpoint}: ${ isMarketData ? response.data : JSON.stringify(response.data)}`);
     return response.data;
   } catch (error: any) {
     // Handle specific API errors
     if (error.response) {
-      const status = error.response.status;
-      const errorData = error.response.data;
+      const status = error.response!.status;
+      const errorData = error.response!.data;
       
       // Handle authentication errors
       if (status === 401) {
@@ -232,4 +234,35 @@ export async function tradovateRequest(method: string, endpoint: string, data?: 
     logger.error(`Error making request to ${endpoint}:`, error);
     throw new Error(`Tradovate API request to ${endpoint} failed: ${error.message}`);
   }
-} 
+}
+
+export async function getAccessToken(retry: boolean = true) {
+  try {
+    // First try to use an existing valid token
+    if (isAccessTokenValid() && accessToken) {
+      logger.info('Using existing valid access token');
+      return { accessToken, expiresAt: accessTokenExpiry };
+    }
+    
+    // If no valid token, get a new one
+    logger.info('No valid token found, authenticating...');
+    const token = await authenticate();
+    return { accessToken: token, expiresAt: accessTokenExpiry };
+  } catch (error) {
+    if (retry) {
+      // If failed and retry is allowed, wait and try one more time
+      logger.warn('Failed to get access token, retrying after delay...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      return getAccessToken(false); // Retry once with retry=false to avoid infinite loops
+    } else {
+      // If retry also failed or not allowed, log and rethrow
+      logger.error('Failed to get access token after retry:', error);
+      throw error;
+    }
+  }
+}
+
+export function isTokenValid(expiration: number | null) {
+  const timeLeft = new Date(expiration!).getTime() - new Date().getTime();
+  return timeLeft > 0;
+}

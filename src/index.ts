@@ -50,6 +50,17 @@ import {
   handleGetMarketData,
   handleListOrders
 } from "./tools.js";
+import { connect } from "./connect.js";
+import { getTradovateMdApiUrl } from "./auth.js";
+import { WebSocket } from "ws";
+import { TradovateSocket, createMarketDataSocket, createTradingSocket } from "./socket.js";
+
+// Add global declaration for tradovate sockets
+declare global {
+  var tradovateWs: WebSocket;
+  var marketDataSocket: TradovateSocket;
+  var tradingSocket: TradovateSocket;
+}
 
 /**
  * Create the MCP server
@@ -68,7 +79,17 @@ export const server = new Server(
           description: "Current positions in your Tradovate account",
         },
       },
-      prompts: {},
+      prompts: {
+        analyze_market_data: [{
+          name: "analyze_market_data",
+          description: "Analyze market data for a specific contract",
+          arguments: {
+            name: "symbol",
+            description: "The contract symbol (e.g., ESZ4, NQZ4)",
+            required: true,
+          }
+        }]
+      },
       tools: {
         get_contract_details: {
           description: "Get detailed information about a specific contract by symbol",
@@ -539,6 +560,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
  * Implements the logic for each tool
  */
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+
   switch (request.params.name) {
     case "get_contract_details":
       return await handleGetContractDetails(request);
@@ -590,7 +612,16 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
  */
 server.setRequestHandler(ListPromptsRequestSchema, async () => {
   return {
-    prompts: [] // No templates/prompts available in this server
+    prompts: [{
+      name: "analyze_market_data",
+      id: "analyze_market_data",
+      description: "Analyze market data for a specific contract",
+      arguments: {
+        name: "symbol",
+        description: "The contract symbol (e.g., ESZ4, NQZ4)",
+        required: true,
+      }
+    }] // No templates/prompts available in this server
   };
 });
 
@@ -606,7 +637,6 @@ export async function initialize() {
     // Authenticate with Tradovate API
     await authenticate();
     logger.info("Tradovate MCP server initialized successfully");
-    logger.info("Tradovate MCP server initialized successfully");
     
     // Initialize data
     await initializeData();
@@ -617,12 +647,9 @@ export async function initialize() {
         await initializeData();
       } catch (error) {
         logger.error("Error refreshing data:", error);
-        logger.error("Error refreshing data:", error);
       }
     }, 60 * 60 * 1000);
   } catch (error) {
-    logger.error("Failed to initialize Tradovate MCP server:", error);
-    logger.warn("Server will start with mock data fallback");
     logger.error("Failed to initialize Tradovate MCP server:", error);
     logger.warn("Server will start with mock data fallback");
   }
@@ -633,9 +660,152 @@ export async function initialize() {
  * This allows the server to communicate via standard input/output streams.
  */
 export async function main() {
-  await initialize();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  try {
+    logger.info("Initializing Tradovate MCP server with WebSockets...");
+    
+    // Initialize authentication first to ensure we have valid tokens
+    await authenticate();
+    logger.info("Authentication successful");
+    
+    // A flag to track if at least one WebSocket connection is established
+    let hasAtLeastOneConnection = false;
+    
+    // Initialize WebSocket connections in sequence with individual error handling
+    try {
+      // Initialize market data socket
+      global.marketDataSocket = await createMarketDataSocket();
+      logger.info("Market Data WebSocket connected successfully");
+      hasAtLeastOneConnection = true;
+    } catch (mdError) {
+      logger.error("Failed to connect to Market Data WebSocket:", mdError);
+      logger.warn("Market data functionality will be limited");
+    }
+    
+    try {
+      // Connect to trading socket (use demo environment by default)
+      const useLiveTrading = process.env.TRADOVATE_API_ENVIRONMENT === 'live';
+      global.tradingSocket = await createTradingSocket(useLiveTrading);
+      logger.info(`Trading WebSocket connected successfully to ${useLiveTrading ? 'live' : 'demo'} environment`);
+      hasAtLeastOneConnection = true;
+    } catch (tradeError) {
+      logger.error("Failed to connect to Trading WebSocket:", tradeError);
+      logger.warn("Trading functionality will be limited");
+    }
+    
+    try {
+      // For backward compatibility - using the existing code that uses this global
+      const ws = new WebSocket(getTradovateMdApiUrl());
+      global.tradovateWs = await connect(ws);
+      logger.info("Legacy WebSocket connected successfully");
+      hasAtLeastOneConnection = true;
+    } catch (legacyError) {
+      logger.error("Failed to connect legacy WebSocket:", legacyError);
+      logger.warn("Legacy WebSocket functionality will be unavailable");
+    }
+    
+    // Warn if no WebSocket connections were established
+    if (!hasAtLeastOneConnection) {
+      logger.warn("No WebSocket connections could be established. Real-time data functionality will be unavailable.");
+      logger.warn("The server will continue in limited functionality mode.");
+    }
+    
+    // Initialize data and authenticate
+    await initialize();
+    
+    // Start MCP server
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    logger.info("MCP Server started successfully");
+    
+    // Register signal handlers for graceful shutdown
+    process.on('SIGINT', async () => {
+      console.log('\nReceived SIGINT (Ctrl+C). Gracefully shutting down...');
+      try {
+        // Close WebSocket connections
+        if (global.tradovateWs) {
+          logger.info('Closing legacy WebSocket connection...');
+          try {
+            global.tradovateWs.close();
+          } catch (err) {
+            logger.warn('Error closing legacy WebSocket:', err);
+          }
+        }
+        
+        if (global.marketDataSocket) {
+          logger.info('Closing Market Data WebSocket connection...');
+          try {
+            global.marketDataSocket.close();
+          } catch (err) {
+            logger.warn('Error closing Market Data WebSocket:', err);
+          }
+        }
+        
+        if (global.tradingSocket) {
+          logger.info('Closing Trading WebSocket connection...');
+          try {
+            global.tradingSocket.close();
+          } catch (err) {
+            logger.warn('Error closing Trading WebSocket:', err);
+          }
+        }
+        
+        logger.info('All connections closed successfully');
+        process.exit(0);
+      } catch (error) {
+        logger.error('Error during shutdown:', error);
+        process.exit(1);
+      }
+    });
+    
+    // Also handle SIGTERM for container environments
+    process.on('SIGTERM', async () => {
+      console.log('\nReceived SIGTERM. Gracefully shutting down...');
+      try {
+        // Close WebSocket connections
+        if (global.tradovateWs) {
+          try { global.tradovateWs.close(); } catch (err) { logger.warn('Error closing legacy WebSocket:', err); }
+        }
+        if (global.marketDataSocket) {
+          try { global.marketDataSocket.close(); } catch (err) { logger.warn('Error closing Market Data WebSocket:', err); }
+        }
+        if (global.tradingSocket) {
+          try { global.tradingSocket.close(); } catch (err) { logger.warn('Error closing Trading WebSocket:', err); }
+        }
+        
+        logger.info('All connections closed successfully');
+        process.exit(0);
+      } catch (error) {
+        logger.error('Error during shutdown:', error);
+        process.exit(1);
+      }
+    });
+    
+    // Add unhandled error handlers to prevent crashes
+    process.on('uncaughtException', (error) => {
+      logger.error('Uncaught Exception:', error);
+      // Don't exit on uncaught - let the process continue if possible
+    });
+    
+    process.on('unhandledRejection', (reason, promise) => {
+      logger.error('Unhandled Promise Rejection:', reason);
+      // Don't exit on unhandled promise - let the process continue if possible
+    });
+    
+  } catch (error) {
+    logger.error("Failed to initialize server:", error);
+    logger.warn("Will attempt to continue with partial functionality");
+    
+    // Try to start the server anyway
+    try {
+      await initialize();
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
+      logger.info("MCP Server started in limited functionality mode");
+    } catch (serverError) {
+      logger.error("Fatal error starting server:", serverError);
+      process.exit(1);
+    }
+  }
 }
 
 // Only run main if this file is executed directly
@@ -648,7 +818,6 @@ if (!isTestEnvironment) {
   const isMainModule = process.argv.length > 1 && process.argv[1].includes('index');
   if (isMainModule) {
     main().catch((error) => {
-      logger.error("Server error:", error);
       logger.error("Server error:", error);
       process.exit(1);
     });
