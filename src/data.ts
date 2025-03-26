@@ -14,7 +14,7 @@ export let accountsCache: { [id: string]: Account } = {};
 export async function fetchContracts(): Promise<{ [id: string]: Contract }> {
   try {
     // Get all contracts
-    const contractsList = await tradovateRequest('GET', 'contract/list');
+    const contractsList = await tradovateRequest('GET', 'contract/find?name=ESM5');
     
     // Convert array to object with id as key
     const contractsMap: { [id: string]: Contract } = {};

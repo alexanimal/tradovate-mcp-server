@@ -23,8 +23,10 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "0.6.0",
+    "@types/ws": "^8.18.0",
     "axios": "^1.6.7",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "ws": "^8.18.1"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",
