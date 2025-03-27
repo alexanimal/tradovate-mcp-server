@@ -1,6 +1,7 @@
 import * as logger from "./logger.js";
 import { tradovateRequest } from './auth.js';
 import { Contract, Position, Order, Account } from './types.js';
+import { WebSocketManager, TradovateSocket } from './socket.js';
 
 // Data storage for caching API responses
 export let contractsCache: { [id: string]: Contract } = {};
@@ -218,5 +219,47 @@ export async function initializeData() {
         }
       };
     }
+  }
+}
+
+/**
+ * Non-blocking function to get market data using WebSocketManager.
+ * This function can be used by tools to access market data without blocking the application.
+ * 
+ * @param symbol The symbol to get data for (e.g., 'ESM3')
+ * @param options Additional options for the request
+ * @returns Promise with the market data
+ */
+export async function getMarketDataNonBlocking(symbol: string, options: any = {}): Promise<any> {
+  try {
+    logger.info(`Getting market data for ${symbol} (non-blocking)...`);
+    
+    // Get the WebSocket instance from the manager
+    const socketManager = WebSocketManager.getInstance();
+    const socket = await socketManager.getMarketDataSocket();
+    
+    // Create a promise that will resolve when we get the data
+    return new Promise((resolve, reject) => {
+      // Set a timeout to prevent hanging
+      const timeout = setTimeout(() => {
+        reject(new Error(`Timeout getting market data for ${symbol}`));
+      }, options.timeout || 10000);
+      
+      // Subscribe to market data
+      socket.subscribe({
+        url: 'md/subscribequote',
+        body: { symbol },
+        subscription: (data) => {
+          clearTimeout(timeout);
+          resolve(data);
+        }
+      }).catch(error => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+    });
+  } catch (error) {
+    logger.error(`Error getting market data for ${symbol}:`, error);
+    throw error;
   }
 } 

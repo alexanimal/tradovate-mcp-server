@@ -1,8 +1,8 @@
 import * as logger from "./logger.js";
 import { tradovateRequest } from './auth.js';
-import { contractsCache, positionsCache, ordersCache, accountsCache, fetchPositions } from './data.js';
+import { contractsCache, positionsCache, ordersCache, accountsCache, fetchPositions, getMarketDataNonBlocking } from './data.js';
 import { query } from './connect.js';
-import { TradovateSocket } from './socket.js';
+import { TradovateSocket, WebSocketManager } from './socket.js';
 
 /**
  * Handle get_contract_details tool
@@ -657,7 +657,8 @@ export async function handleGetAccountSummary(request: any) {
 }
 
 /**
- * Handle get_market_data tool
+ * Handle get_market_data tool - Retrieves market data using only WebSockets
+ * No fallbacks to legacy methods or cached data are used
  */
 export async function handleGetMarketData(request: any) {
   const symbol = String(request.params.arguments?.symbol);
@@ -669,10 +670,14 @@ export async function handleGetMarketData(request: any) {
   }
 
   try {
+    // Log the start of the market data request
+    logger.info(`Starting market data request for symbol: ${symbol}, dataType: ${dataType}`);
+    
     // Find contract by symbol
     const contract = await tradovateRequest('GET', `contract/find?name=${symbol}`);
     
     if (!contract) {
+      logger.warn(`Contract not found for symbol: ${symbol}`);
       return {
         content: [{
           type: "text",
@@ -681,199 +686,134 @@ export async function handleGetMarketData(request: any) {
       };
     }
 
-    let marketData: any;
-    let dataSource = "real-time"; // default source type
+    // Get WebSocketManager instance - this won't block if already connected
+    const socketManager = WebSocketManager.getInstance();
     
-    // Check if we have the new socket connections available
-    if (global.marketDataSocket && global.marketDataSocket.isConnected()) {
-      logger.info(`Using market data socket for ${dataType} data on ${symbol}`);
-      
+    // First check socket connection status if the method exists
+    // or just proceed with the connection attempt
+    let socketState = 'UNKNOWN';
+    try {
+      // Try to access the status method if it exists
+      // @ts-ignore - We'll handle the case if the method doesn't exist
+      socketState = socketManager.getMarketDataSocketStatus ? socketManager.getMarketDataSocketStatus() : 'UNKNOWN';
+      logger.info(`Market data socket status for ${symbol}: ${socketState}`);
+    } catch (statusError) {
+      logger.warn(`Unable to check socket status: ${statusError instanceof Error ? statusError.message : String(statusError)}`);
+    }
+    
+    // If we know the socket is not connected or status is unknown, try to connect with timeout
+    if (socketState !== 'CONNECTED') {
+      logger.warn(`Market data socket may not be connected (status: ${socketState}). Attempting to connect...`);
+      // Try to get the socket but with a short timeout to avoid hanging
       try {
-        switch (dataType) {
-          case "Quote":
-            // Create a promise that will resolve when we get the quote data
-            marketData = await new Promise((resolve, reject) => {
-              let timeoutId: NodeJS.Timeout;
-              
-              // Set a timeout to prevent hanging if we don't get a response
-              timeoutId = setTimeout(() => {
-                reject(new Error('Quote data request timed out'));
-              }, 10000);
-              
+        await Promise.race([
+          socketManager.getMarketDataSocket(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Socket connection timeout')), 5000))
+        ]);
+        logger.info(`Successfully connected to market data socket for ${symbol}`);
+      } catch (socketError) {
+        logger.error(`Failed to connect to market data socket: ${socketError instanceof Error ? socketError.message : String(socketError)}`);
+        return {
+          content: [{
+            type: "text",
+            text: `Unable to connect to market data WebSocket: ${socketError instanceof Error ? socketError.message : String(socketError)}`
+          }]
+        };
+      }
+    }
+    
+    // Get socket from the manager with a timeout to avoid hanging
+    const socket = await Promise.race([
+      socketManager.getMarketDataSocket(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Socket retrieval timeout')), 5000))
+    ]) as TradovateSocket; // Cast to the expected type
+    
+    logger.info(`Using WebSocket for ${dataType} data on ${symbol}`);
+    
+    let marketData;
+    const TIMEOUT_MS = 8000; // Reduce timeout to 8 seconds to be more responsive
+    
+    // Retrieve data based on the requested type
+    switch (dataType) {
+      case "Quote": {
+        // Create a promise that will resolve when we get the quote data
+        marketData = await Promise.race([
+          new Promise(async (resolve, reject) => {
+            // Set shorter timeout
+            const timeout = setTimeout(() => {
+              logger.warn(`Quote data request for ${symbol} timed out`);
+              reject(new Error(`Unable to fetch quote data for ${symbol} from WebSocket: request timed out`));
+            }, TIMEOUT_MS);
+            
+            try {
               // Subscribe to quote data
-              global.marketDataSocket.subscribe({
+              socket.subscribe({
                 url: 'md/subscribequote',
                 body: { symbol },
-                subscription: (data) => {
-                  clearTimeout(timeoutId);
+                subscription: (data: any) => {
+                  logger.info(`Received quote data for ${symbol}`);
+                  clearTimeout(timeout);
                   resolve(data);
-                  // Note: This would normally keep receiving updates, but we just want the first one
                 }
-              }).catch(error => {
-                clearTimeout(timeoutId);
-                reject(error);
+              }).catch((error: Error) => {
+                logger.error(`Error subscribing to quote data for ${symbol}: ${error.message}`);
+                clearTimeout(timeout);
+                reject(new Error(`Unable to fetch quote data for ${symbol} from WebSocket: ${error.message}`));
               });
-            });
-            break;
+            } catch (subError) {
+              clearTimeout(timeout);
+              logger.error(`Exception during quote subscription for ${symbol}: ${subError instanceof Error ? subError.message : String(subError)}`);
+              reject(new Error(`Error during WebSocket quote subscription: ${subError instanceof Error ? subError.message : String(subError)}`));
+            }
+          }),
+          // Fallback if the promise doesn't resolve in time
+          new Promise((_, reject) => setTimeout(() => 
+            reject(new Error(`WebSocket response timeout - server might be busy`)), 
+            TIMEOUT_MS + 2000)) // Slightly longer than the inner timeout
+        ]);
+        break;
+      }
+        
+      case "DOM": {
+        // Create a promise that will resolve when we get the DOM data
+        marketData = await Promise.race([
+          new Promise(async (resolve, reject) => {
+            // Set shorter timeout
+            const timeout = setTimeout(() => {
+              logger.warn(`DOM data request for ${symbol} timed out`);
+              reject(new Error(`Unable to fetch DOM data for ${symbol} from WebSocket: request timed out`));
+            }, TIMEOUT_MS);
             
-          case "DOM":
-            // Create a promise that will resolve when we get the DOM data
-            marketData = await new Promise((resolve, reject) => {
-              let timeoutId: NodeJS.Timeout;
-              
-              // Set a timeout to prevent hanging if we don't get a response
-              timeoutId = setTimeout(() => {
-                reject(new Error('DOM data request timed out'));
-              }, 10000);
-              
-              // Subscribe to DOM data
-              global.marketDataSocket.subscribe({
+            try {
+              // Subscribe to DOM data  
+              socket.subscribe({
                 url: 'md/subscribedom',
                 body: { symbol },
-                subscription: (data) => {
-                  clearTimeout(timeoutId);
+                subscription: (data: any) => {
+                  logger.info(`Received DOM data for ${symbol}`);
+                  clearTimeout(timeout);
                   resolve(data);
-                  // Note: This would normally keep receiving updates, but we just want the first one
                 }
-              }).catch(error => {
-                clearTimeout(timeoutId);
-                reject(error);
+              }).catch((error: Error) => {
+                logger.error(`Error subscribing to DOM data for ${symbol}: ${error.message}`);
+                clearTimeout(timeout);
+                reject(new Error(`Unable to fetch DOM data for ${symbol} from WebSocket: ${error.message}`));
               });
-            });
-            break;
-          
-          case "Chart":
-            // Convert timeframe to chart parameters
-            let chartUnits;
-            let chartLength;
-            
-            switch (chartTimeframe) {
-              case "1min": chartUnits = "m"; chartLength = 1; break;
-              case "5min": chartUnits = "m"; chartLength = 5; break;
-              case "15min": chartUnits = "m"; chartLength = 15; break;
-              case "30min": chartUnits = "m"; chartLength = 30; break;
-              case "1hour": chartUnits = "h"; chartLength = 1; break;
-              case "4hour": chartUnits = "h"; chartLength = 4; break;
-              case "1day": chartUnits = "d"; chartLength = 1; break;
-              default: chartUnits = "m"; chartLength = 1;
+            } catch (subError) {
+              clearTimeout(timeout);
+              logger.error(`Exception during DOM subscription for ${symbol}: ${subError instanceof Error ? subError.message : String(subError)}`);
+              reject(new Error(`Error during WebSocket DOM subscription: ${subError instanceof Error ? subError.message : String(subError)}`));
             }
-            
-            // Create a promise that will resolve when we get the chart data
-            marketData = await new Promise((resolve, reject) => {
-              let timeoutId: NodeJS.Timeout;
-              
-              // Set a timeout to prevent hanging if we don't get a response
-              timeoutId = setTimeout(() => {
-                reject(new Error('Chart data request timed out'));
-              }, 10000);
-              
-              // Get chart data using the chart subscription
-              global.marketDataSocket.subscribe({
-                url: 'md/getchart',
-                body: { 
-                  symbol,
-                  chartDescription: `${chartLength}${chartUnits}`,
-                  timeRange: 3600 // 1 hour of data
-                },
-                subscription: (data) => {
-                  clearTimeout(timeoutId);
-                  resolve(data);
-                }
-              }).catch(error => {
-                clearTimeout(timeoutId);
-                reject(error);
-              });
-            });
-            break;
-          
-          default:
-            throw new Error(`Unsupported data type: ${dataType}`);
-        }
-      } catch (socketError) {
-        logger.error(`Error using market data socket for ${dataType} data on ${symbol}:`, socketError);
-        logger.info(`Falling back to legacy approach for ${dataType} data on ${symbol}`);
-        // Just return the legacy result directly instead of trying to parse it
-        return await handleGetMarketDataLegacy(request);
+          }),
+          // Fallback if the promise doesn't resolve in time
+          new Promise((_, reject) => setTimeout(() => 
+            reject(new Error(`WebSocket response timeout - server might be busy`)), 
+            TIMEOUT_MS + 2000))
+        ]);
+        break;
       }
       
-      // If we successfully got market data using the socket, return it
-      return {
-        content: [{
-          type: "text",
-          text: `Market data for ${symbol} (${dataType}) [${dataSource}]:\n${JSON.stringify(marketData, null, 2)}`
-        }]
-      };
-    } else {
-      // Fallback to legacy approach
-      logger.warn(`Market data socket not available, using legacy approach for ${dataType} data on ${symbol}`);
-      // Just return the legacy result directly
-      return await handleGetMarketDataLegacy(request);
-    }
-  } catch (error) {
-    logger.error(`Error getting market data for ${symbol}:`, error);
-    return await handleGetMarketDataLegacy(request);
-  }
-}
-
-/**
- * Legacy implementation of market data handling
- */
-async function handleGetMarketDataLegacy(request: any) {
-  const symbol = String(request.params.arguments?.symbol);
-  const dataType = String(request.params.arguments?.dataType);
-  const chartTimeframe = String(request.params.arguments?.chartTimeframe || "1min");
-
-  if (!symbol || !dataType) {
-    throw new Error("Symbol and dataType are required");
-  }
-
-  try {
-    // Find contract by symbol
-    const contract = await tradovateRequest('GET', `contract/find?name=${symbol}`);
-    
-    if (!contract) {
-      return {
-        content: [{
-          type: "text",
-          text: `Contract not found for symbol: ${symbol}`
-        }]
-      };
-    }
-
-    let marketData: any;
-    
-    switch (dataType) {
-      case "Quote":
-        // Get quote data using market data API
-        try {
-          if (global.tradovateWs && global.tradovateWs.readyState === WebSocket.OPEN) {
-            const endpoint = `md/getQuote?contractId=${contract.id}`;
-            marketData = await query(global.tradovateWs, endpoint);
-            logger.info(`Market Data: ${JSON.stringify(marketData)}`);
-          } else {
-            throw new Error('Legacy WebSocket not connected');
-          }
-        } catch (wsError) {
-          logger.error(`WebSocket query failed: ${wsError}`);
-          logger.info('Falling back to mock data for Quote');
-          // Fallback to mock data
-          marketData = {
-            symbol,
-            bid: 5275.25,
-            ask: 5275.50,
-            last: 5275.25,
-            volume: 1250000,
-            timestamp: new Date().toISOString()
-          };
-        }
-        break;
-      
-      case "DOM":
-        // Get DOM data using market data API
-        marketData = await tradovateRequest('GET', `md/getDOM?contractId=${contract.id}`, undefined, true);
-        break;
-      
-      case "Chart":
+      case "Chart": {
         // Convert timeframe to chart parameters
         let chartUnits;
         let chartLength;
@@ -889,125 +829,70 @@ async function handleGetMarketDataLegacy(request: any) {
           default: chartUnits = "m"; chartLength = 1;
         }
         
-        // Get chart data using market data API
-        marketData = await tradovateRequest(
-          'GET', 
-          `md/getChart?contractId=${contract.id}&chartDescription=${chartLength}${chartUnits}&timeRange=3600`, 
-          undefined, 
-          true
-        );
+        // Create a promise that will resolve when we get the chart data
+        marketData = await Promise.race([
+          new Promise(async (resolve, reject) => {
+            // Set shorter timeout
+            const timeout = setTimeout(() => {
+              logger.warn(`Chart data request for ${symbol} timed out`);
+              reject(new Error(`Unable to fetch chart data for ${symbol} from WebSocket: request timed out`));
+            }, TIMEOUT_MS);
+            
+            try {
+              // Get chart data using the chart subscription
+              socket.subscribe({
+                url: 'md/getchart',
+                body: { 
+                  symbol,
+                  chartDescription: `${chartLength}${chartUnits}`,
+                  timeRange: 3600 // 1 hour of data
+                },
+                subscription: (data: any) => {
+                  logger.info(`Received chart data for ${symbol}`);
+                  clearTimeout(timeout);
+                  resolve(data);
+                }
+              }).catch((error: Error) => {
+                logger.error(`Error subscribing to chart data for ${symbol}: ${error.message}`);
+                clearTimeout(timeout);
+                reject(new Error(`Unable to fetch chart data for ${symbol} from WebSocket: ${error.message}`));
+              });
+            } catch (subError) {
+              clearTimeout(timeout);
+              logger.error(`Exception during chart subscription for ${symbol}: ${subError instanceof Error ? subError.message : String(subError)}`);
+              reject(new Error(`Error during WebSocket chart subscription: ${subError instanceof Error ? subError.message : String(subError)}`));
+            }
+          }),
+          // Fallback if the promise doesn't resolve in time
+          new Promise((_, reject) => setTimeout(() => 
+            reject(new Error(`WebSocket response timeout - server might be busy`)), 
+            TIMEOUT_MS + 2000))
+        ]);
         break;
+      }
       
       default:
         throw new Error(`Unsupported data type: ${dataType}`);
     }
-
+    
+    // Return the data retrieved from WebSocket
+    logger.info(`Successfully retrieved ${dataType} data for ${symbol}`);
     return {
       content: [{
         type: "text",
         text: `Market data for ${symbol} (${dataType}):\n${JSON.stringify(marketData, null, 2)}`
       }]
     };
+    
   } catch (error) {
+    // Enhanced error logging
     logger.error(`Error getting market data for ${symbol}:`, error);
     
-    // Fallback to mock data
-    const mockContract = Object.values(contractsCache).find(c => c.name === symbol);
-    
-    if (!mockContract) {
-      return {
-        content: [{
-          type: "text",
-          text: `Contract not found for symbol: ${symbol}`
-        }]
-      };
-    }
-
-    let mockMarketData: any;
-    
-    switch (dataType) {
-      case "Quote":
-        mockMarketData = {
-          symbol,
-          bid: 5275.25,
-          ask: 5275.50,
-          last: 5275.25,
-          volume: 1250000,
-          timestamp: new Date().toISOString()
-        };
-        break;
-      
-      case "DOM":
-        mockMarketData = {
-          symbol,
-          bids: [
-            { price: 5275.25, size: 250 },
-            { price: 5275.00, size: 175 },
-            { price: 5274.75, size: 320 },
-            { price: 5274.50, size: 450 },
-            { price: 5274.25, size: 280 }
-          ],
-          asks: [
-            { price: 5275.50, size: 180 },
-            { price: 5275.75, size: 220 },
-            { price: 5276.00, size: 350 },
-            { price: 5276.25, size: 275 },
-            { price: 5276.50, size: 400 }
-          ],
-          timestamp: new Date().toISOString()
-        };
-        break;
-      
-      case "Chart":
-        // Generate mock chart data for the requested timeframe
-        const now = new Date();
-        const bars = [];
-        
-        for (let i = 0; i < 10; i++) {
-          const barTime = new Date(now);
-          
-          switch (chartTimeframe) {
-            case "1min": barTime.setMinutes(now.getMinutes() - i); break;
-            case "5min": barTime.setMinutes(now.getMinutes() - i * 5); break;
-            case "15min": barTime.setMinutes(now.getMinutes() - i * 15); break;
-            case "30min": barTime.setMinutes(now.getMinutes() - i * 30); break;
-            case "1hour": barTime.setHours(now.getHours() - i); break;
-            case "4hour": barTime.setHours(now.getHours() - i * 4); break;
-            case "1day": barTime.setDate(now.getDate() - i); break;
-          }
-          
-          const basePrice = 5275.00;
-          const open = basePrice - i * 0.25;
-          const high = open + Math.random() * 1.5;
-          const low = open - Math.random() * 1.5;
-          const close = (open + high + low) / 3;
-          const volume = Math.floor(Math.random() * 10000) + 5000;
-          
-          bars.push({
-            timestamp: barTime.toISOString(),
-            open,
-            high,
-            low,
-            close,
-            volume
-          });
-        }
-        
-        mockMarketData = {
-          symbol,
-          timeframe: chartTimeframe,
-          bars: bars.reverse()
-        };
-        break;
-      
-      default:
-        throw new Error(`Unsupported data type: ${dataType}`);
-    }
-
+    // Always provide a response, never block
     return {
       content: [{
         type: "text",
-        text: `Market data for ${symbol} (${dataType}) [MOCK DATA]:\n${JSON.stringify(mockMarketData, null, 2)}`
+        text: `Unable to fetch market data for ${symbol} from WebSocket: ${error instanceof Error ? error.message : String(error)}`
       }]
     };
   }
@@ -1234,4 +1119,4 @@ export async function handleFindProduct(request: any) {
       }]
     };
   }
-} 
+}

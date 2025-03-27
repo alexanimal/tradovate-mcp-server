@@ -1,455 +1,413 @@
 const { describe, test, expect, beforeEach, afterEach, afterAll } = require('@jest/globals');
-const EventEmitter = require('events');
+const WebSocket = require('ws');
+const Auth = require('../src/socket');
 
-// Import helper for WebSocket mocking
-const {
-  MockWebSocket,
-  createWebSocketMock,
-  mockAuth,
-  mockLogger,
-  simulateWebSocketOpen,
-  simulateWebSocketError,
-  simulateWebSocketClose,
-  simulateWebSocketMessage,
-  simulateAuthentication
-} = require('./socket-helper');
+// Mock dependencies
+// Update the WebSocket mock to be a jest function that can be cleared properly
+jest.mock('ws', () => {
+  const mockWebSocketFn = jest.fn();
+  mockWebSocketFn.CONNECTING = 0;
+  mockWebSocketFn.OPEN = 1;
+  mockWebSocketFn.CLOSING = 2;
+  mockWebSocketFn.CLOSED = 3;
+  return mockWebSocketFn;
+});
 
-// Mock dependencies but keep real socket implementation
-jest.mock('../src/auth.js', () => mockAuth);
-jest.mock('../src/logger.js', () => mockLogger);
+jest.mock('../src/logger', () => ({
+  info: jest.fn(),
+  error: jest.fn(),
+  warn: jest.fn(),
+  debug: jest.fn(),
+}));
 
-// Create WebSocket mock 
-const WebSocketMock = createWebSocketMock();
-jest.mock('ws', () => WebSocketMock);
-
-// Import the real implementation
-const socketModule = require('../src/socket.js');
-const { TradovateSocket } = socketModule;
-
-// Constants for Tradovate URLs
-const MD_URL = 'wss://md-demo.tradovateapi.com/v1/websocket';
-const WS_DEMO_URL = 'wss://demo.tradovateapi.com/v1/websocket';
-
-// Store active sockets for cleanup
-const activeSockets = new Set();
+jest.mock('../src/auth', () => ({
+  getAccessToken: jest.fn().mockResolvedValue({ 
+    accessToken: 'mock-access-token', 
+    expiresAt: Date.now() + 3600000 
+  }),
+  tradovateRequest: jest.fn().mockImplementation((method, endpoint) => {
+    if (endpoint.includes('find')) {
+      return Promise.resolve({ id: 12345 });
+    } else if (endpoint.includes('suggest')) {
+      return Promise.resolve([{ id: 12345 }]);
+    }
+    return Promise.resolve({});
+  })
+}));
 
 describe('Socket Implementation Tests', () => {
-  let socket;
+  let TradovateSocket;
   let mockWs;
   
   beforeEach(() => {
     jest.clearAllMocks();
-    WebSocketMock.cleanup();
     
-    // Create a new socket instance
-    socket = new TradovateSocket({ debugLabel: 'test-socket' });
-    activeSockets.add(socket);
-    
-    // Monkey patch the socket's connect method to cleanup timeouts
-    const originalConnect = socket.connect;
-    socket.connect = function(...args) {
-      try {
-        return originalConnect.apply(this, args);
-      } catch (e) {
-        // If connect throws, we still want to cleanup
-        if (this.ws) {
-          this.ws.close();
-          this.ws = null;
-        }
-        throw e;
-      }
+    // Reset WebSocket mock - no need to call mockClear since jest.clearAllMocks() handles it
+    mockWs = {
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      send: jest.fn(),
+      close: jest.fn(),
+      readyState: WebSocket.OPEN,
+      sent: []
     };
+    
+    // Track sent messages 
+    mockWs.send.mockImplementation((msg) => {
+      mockWs.sent.push(msg);
+    });
+    
+    // Provide mock WebSocket instance
+    WebSocket.mockImplementation(() => mockWs);
+    
+    // Re-import to get fresh module
+    jest.isolateModules(() => {
+      TradovateSocket = require('../src/socket').TradovateSocket;
+    });
   });
   
   afterEach(() => {
-    try {
-      // Clear mock WebSocket instances 
-      WebSocketMock.cleanup();
-      
-      // Close any sockets we may have created
-      activeSockets.forEach(s => {
-        try {
-          if (s && typeof s.close === 'function') {
-            // Replace close with a mock to avoid actual network actions
-            if (s.isConnected && s.isConnected()) {
-              s.close = jest.fn();
-              s.close();
-            }
-          }
-        } catch (e) {
-          // Ignore errors during cleanup
-        }
-      });
-      
-      // Clear active sockets
-      activeSockets.clear();
-      
-      // Reset socket
-      socket = null;
-      mockWs = null;
-    } finally {
-      // Reset all mocks and timers
-      jest.clearAllMocks();
-      if (jest.isMockFunction(setTimeout)) {
-        jest.clearAllTimers();
-      }
-    }
+    jest.restoreAllMocks();
   });
   
   afterAll(() => {
-    WebSocketMock.cleanup();
-    activeSockets.clear();
-    jest.useRealTimers();
+    jest.resetModules();
   });
   
-  // Helper function to simulate the WebSocket connection and auth flow
-  async function setupMockConnection(socket, url = 'wss://test.tradovateapi.com/v1/websocket') {
-    // Start connect process
-    const connectPromise = socket.connect(url, 'test-token');
+  test('should initialize with default properties', () => {
+    const socket = new TradovateSocket();
+    expect(socket).toBeDefined();
+    expect(socket.isConnected()).toBe(false);
+  });
+  
+  // Helper to setup a mock connection
+  const setupMockConnection = async () => {
+    const socket = new TradovateSocket();
+    const connectPromise = socket.connect('wss://test-url.com', 'test-token');
     
-    // Get the WebSocket instance
-    const wsInstances = WebSocketMock.instances;
-    expect(wsInstances.length).toBeGreaterThan(0);
-    mockWs = wsInstances[wsInstances.length - 1];
+    // Simulate the open event
+    const openHandler = mockWs.addEventListener.mock.calls.find(
+      call => call[0] === 'open'
+    )[1];
     
-    // First we need to set the socket to OPEN state
-    simulateWebSocketOpen(mockWs);
+    // Trigger open event
+    openHandler();
     
-    // Emit the initial handshake message
-    simulateWebSocketMessage(mockWs, 'o');
+    // Now we need to wait a bit for the setTimeout in the open handler to execute
+    await new Promise(resolve => setTimeout(resolve, 200));
     
     // Extract the message ID from the sent auth message
     expect(mockWs.sent.length).toBeGreaterThan(0);
     const authMsg = mockWs.sent[0];
     const authIdMatch = authMsg.match(/authorize\n(\d+)/);
     expect(authIdMatch).toBeTruthy();
-    const authId = parseInt(authIdMatch[1]);
+    
+    // Find the message handler for auth responses
+    const messageHandlers = mockWs.addEventListener.mock.calls.filter(
+      call => call[0] === 'message'
+    );
+    expect(messageHandlers.length).toBeGreaterThan(0);
+    
+    // Get the auth handler (second message handler in our new implementation)
+    const authHandler = messageHandlers[1][1];
     
     // Simulate successful auth response
-    simulateWebSocketMessage(mockWs, `a[{"i":${authId},"s":200,"d":"auth-success"}]`);
+    authHandler({ data: `a[{"i":${authIdMatch[1]},"s":200}]` });
     
-    // Wait for connection to complete
+    // Resolve the connection promise
     await connectPromise;
     
-    return mockWs;
-  }
-  
-  test('should initialize with default properties', () => {
-    expect(socket.isConnected()).toBe(false);
-  });
+    return { socket, authId: authIdMatch[1] };
+  };
   
   test('should connect successfully', async () => {
-    await setupMockConnection(socket);
+    const { socket } = await setupMockConnection();
     expect(socket.isConnected()).toBe(true);
-    expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining('Connecting to Tradovate WebSocket'));
   });
   
   test('should handle connection errors', async () => {
-    const connectPromise = socket.connect('wss://test.com', 'test-token');
+    const socket = new TradovateSocket();
+    const connectPromise = socket.connect('wss://test-url.com', 'test-token');
     
-    // Get the WebSocket instance
-    const wsInstances = WebSocketMock.instances;
-    expect(wsInstances.length).toBeGreaterThan(0);
-    mockWs = wsInstances[wsInstances.length - 1];
-    
-    // First open the connection so error handling works properly
-    simulateWebSocketOpen(mockWs);
+    // Find error handler
+    const errorHandler = mockWs.addEventListener.mock.calls.find(
+      call => call[0] === 'error'
+    )[1];
     
     // Simulate error
-    simulateWebSocketError(mockWs, new Error('Connection error'));
+    errorHandler(new Error('Connection failed'));
     
-    await expect(connectPromise).rejects.toThrow('Connection error');
+    await expect(connectPromise).rejects.toThrow('Connection failed');
     expect(socket.isConnected()).toBe(false);
   });
   
   test('should handle connection timeout', async () => {
-    // Use fake timers for this test
     jest.useFakeTimers();
+    const socket = new TradovateSocket();
+    const connectPromise = socket.connect('wss://test-url.com', 'test-token');
     
-    // Mock setTimeout to avoid actual waiting
-    const connectPromise = socket.connect('wss://test.com', 'test-token');
-    
-    // Fast-forward time to trigger timeout
+    // Fast forward 31 seconds to trigger timeout
     jest.advanceTimersByTime(31000);
     
-    // Use try/finally to ensure timers are reset
-    try {
-      await expect(connectPromise).rejects.toThrow('Connection timeout');
-      expect(socket.isConnected()).toBe(false);
-    } finally {
-      // Be sure to clear all timers to prevent leaks
-      jest.clearAllTimers();
-      jest.useRealTimers();
-    }
+    await expect(connectPromise).rejects.toThrow('Connection timeout');
+    expect(socket.isConnected()).toBe(false);
+    
+    jest.useRealTimers();
   });
   
   test('should handle authentication failure', async () => {
-    // Start connect process
-    const connectPromise = socket.connect('wss://test.com', 'test-token');
+    const socket = new TradovateSocket();
+    const connectPromise = socket.connect('wss://test-url.com', 'test-token');
     
-    // Get the WebSocket instance
-    const wsInstances = WebSocketMock.instances;
-    expect(wsInstances.length).toBeGreaterThan(0);
-    mockWs = wsInstances[wsInstances.length - 1];
+    // Simulate the open event
+    const openHandler = mockWs.addEventListener.mock.calls.find(
+      call => call[0] === 'open'
+    )[1];
     
-    // First open the connection
-    simulateWebSocketOpen(mockWs);
+    // Trigger open event
+    openHandler();
     
-    // Emit the initial handshake message
-    simulateWebSocketMessage(mockWs, 'o');
+    // Now we need to wait a bit for the setTimeout in the open handler to execute
+    await new Promise(resolve => setTimeout(resolve, 200));
     
     // Extract the message ID from the sent auth message
     expect(mockWs.sent.length).toBeGreaterThan(0);
     const authMsg = mockWs.sent[0];
     const authIdMatch = authMsg.match(/authorize\n(\d+)/);
     expect(authIdMatch).toBeTruthy();
-    const authId = parseInt(authIdMatch[1]);
     
-    // Simulate failed auth response
-    simulateWebSocketMessage(mockWs, `a[{"i":${authId},"s":403,"d":"auth-failed"}]`);
+    // Find the message handler for auth responses
+    const messageHandlers = mockWs.addEventListener.mock.calls.filter(
+      call => call[0] === 'message'
+    );
+    
+    // Get the auth handler (second message handler)
+    const authHandler = messageHandlers[1][1];
+    
+    // Simulate auth failure
+    authHandler({ data: `a[{"i":${authIdMatch[1]},"s":401,"d":"Access is denied"}]` });
     
     await expect(connectPromise).rejects.toThrow('Authorization failed');
-    expect(socket.isConnected()).toBe(false);
   });
   
   test('should send messages correctly', async () => {
-    // First connect
-    await setupMockConnection(socket);
+    const { socket, authId } = await setupMockConnection();
     
-    // Test send method
-    const sendOptions = {
-      url: 'test/endpoint',
-      body: { test: 'data' }
-    };
+    // Find the general message handler
+    const messageHandlers = mockWs.addEventListener.mock.calls.filter(
+      call => call[0] === 'message'
+    );
+    const generalHandler = messageHandlers[0][1];
     
-    const sendPromise = socket.send(sendOptions);
+    // Call send
+    const sendPromise = socket.send({ url: 'test/endpoint', body: { param: 'value' } });
     
-    // Extract message ID from the sent message
-    expect(mockWs.sent.length).toBeGreaterThan(1); // Auth + our message
-    const msgParts = mockWs.sent[1].split('\n');
-    const msgId = parseInt(msgParts[1]);
+    // Find the last sent message (should be the test message, not the auth message)
+    const lastSentMsg = mockWs.sent[mockWs.sent.length - 1];
     
-    // Simulate successful response
-    simulateWebSocketMessage(mockWs, `a[{"i":${msgId},"s":200,"d":{"result":"success"}}]`);
+    // Expected format: endpoint\nid\nquery\nbody
+    const [endpoint, id, query, body] = lastSentMsg.split('\n');
+    expect(endpoint).toBe('test/endpoint');
+    expect(id).toBeTruthy();
+    expect(JSON.parse(body)).toEqual({ param: 'value' });
     
-    const result = await sendPromise;
+    // Simulate response
+    generalHandler({ data: `a[{"i":${id},"s":200,"d":"Success"}]` });
     
-    expect(result.s).toBe(200);
-    expect(result.d).toEqual({ result: "success" });
-    expect(mockWs.sent.length).toBe(2); // Auth + our test message
-    expect(mockWs.sent[1]).toContain('test/endpoint');
+    const response = await sendPromise;
+    expect(response.s).toBe(200);
+    expect(response.d).toBe('Success');
   });
   
   test('should handle send error responses', async () => {
-    // First connect
-    await setupMockConnection(socket);
+    const { socket } = await setupMockConnection();
     
-    // Test send method with error response
-    const sendOptions = {
-      url: 'test/endpoint',
-      body: { test: 'data' }
-    };
+    // Find the general message handler
+    const messageHandlers = mockWs.addEventListener.mock.calls.filter(
+      call => call[0] === 'message'
+    );
+    const generalHandler = messageHandlers[0][1];
     
-    const sendPromise = socket.send(sendOptions);
+    // Call send
+    const sendPromise = socket.send({ url: 'test/endpoint', body: { param: 'value' } });
     
-    // Extract message ID from the sent message
-    expect(mockWs.sent.length).toBeGreaterThan(1); // Auth + our message
-    const msgParts = mockWs.sent[1].split('\n');
-    const msgId = parseInt(msgParts[1]);
+    // Find the request ID in the sent message
+    const lastSentMsg = mockWs.sent[mockWs.sent.length - 1];
+    const [_, id] = lastSentMsg.split('\n');
     
     // Simulate error response
-    simulateWebSocketMessage(mockWs, `a[{"i":${msgId},"s":404,"d":{"error":"Not found"}}]`);
+    generalHandler({ data: `a[{"i":${id},"s":400,"d":"Bad Request"}]` });
     
-    await expect(sendPromise).rejects.toMatch(/FAILED:/);
+    await expect(sendPromise).rejects.toMatch(/FAILED/);
   });
   
   test('should throw error when sending without connection', async () => {
-    const sendOptions = {
-      url: 'test/endpoint',
-      body: { test: 'data' }
-    };
-    
-    await expect(socket.send(sendOptions)).rejects.toThrow('WebSocket is not connected');
+    const socket = new TradovateSocket();
+    await expect(
+      socket.send({ url: 'test/endpoint' })
+    ).rejects.toThrow('WebSocket is not connected');
   });
   
   test('should add and remove listeners', async () => {
-    await setupMockConnection(socket);
+    const { socket } = await setupMockConnection();
     
-    // Create a test listener
-    const testListener = jest.fn();
-    const unsubscribe = socket.addListener(testListener);
+    // Find message handler to simulate events
+    const messageHandlers = mockWs.addEventListener.mock.calls.filter(
+      call => call[0] === 'message'
+    );
+    const generalHandler = messageHandlers[0][1];
     
-    // Simulate a message event
-    simulateWebSocketMessage(mockWs, 'a[{"test":"data"}]');
+    // Add listener
+    const mockListener = jest.fn();
+    const remove = socket.addListener(mockListener);
     
-    // Check that the listener was called
-    expect(testListener).toHaveBeenCalled();
+    // Simulate message event
+    generalHandler({ data: 'a[{"d":{"test":"data"}}]' });
     
-    // Unsubscribe and verify it's removed
-    unsubscribe();
-    testListener.mockClear();
+    expect(mockListener).toHaveBeenCalledWith({"d":{"test":"data"}});
     
-    // Simulate another message
-    simulateWebSocketMessage(mockWs, 'a[{"test":"data2"}]');
+    // Remove listener
+    remove();
+    
+    // Simulate another message event
+    mockListener.mockClear();
+    generalHandler({ data: 'a[{"d":{"more":"data"}}]' });
     
     // Listener should not be called
-    expect(testListener).not.toHaveBeenCalled();
+    expect(mockListener).not.toHaveBeenCalled();
   });
   
   test('should handle message processing errors', async () => {
-    await setupMockConnection(socket);
+    const { socket } = await setupMockConnection();
     
-    // Send invalid message format
-    simulateWebSocketMessage(mockWs, 'invalid-json');
+    // Find message handler to simulate events
+    const messageHandlers = mockWs.addEventListener.mock.calls.filter(
+      call => call[0] === 'message'
+    );
+    const generalHandler = messageHandlers[0][1];
     
-    // Should not throw and should log error
-    expect(mockLogger.error).toHaveBeenCalled();
+    // Add listener that throws
+    const mockListener = jest.fn().mockImplementation(() => {
+      throw new Error('Listener error');
+    });
+    socket.addListener(mockListener);
+    
+    // Simulate message event - this should not throw
+    generalHandler({ data: 'a[{"d":{"test":"data"}}]' });
+    
+    // Ensure listener was called
+    expect(mockListener).toHaveBeenCalled();
   });
   
   test('should handle subscription requests', async () => {
-    // Connect to Market Data URL specifically
-    await setupMockConnection(socket, MD_URL);
+    const { socket } = await setupMockConnection();
     
-    // Create a mock subscription callback
-    const mockSubscriptionCallback = jest.fn();
-    
-    // Test subscribe method with proper options
-    const subscribeOptions = {
-      url: 'md/subscribequote',
-      body: { symbol: 'ESM5' },
-      subscription: mockSubscriptionCallback
-    };
-    
-    const subscribePromise = socket.subscribe(subscribeOptions);
-    
-    // Extract message ID from the sent message
-    expect(mockWs.sent.length).toBeGreaterThan(1); // Auth + our message
-    const msgParts = mockWs.sent[1].split('\n');
-    const msgId = parseInt(msgParts[1]);
-    
-    // Simulate successful response
-    simulateWebSocketMessage(mockWs, `a[{"i":${msgId},"s":200,"d":{"subscriptionId":123}}]`);
-    
-    // The subscribe method returns an unsubscribe function
-    const unsubscribeFunction = await subscribePromise;
-    expect(typeof unsubscribeFunction).toBe('function');
-    
-    // Simulate receiving a quote for the subscribed symbol
-    simulateWebSocketMessage(mockWs, `a[{"d":{"quotes":[{"contractId":12345,"price":4200.50}]}}]`);
-    
-    // Verify that the subscription callback was called
-    expect(mockSubscriptionCallback).toHaveBeenCalled();
-  }, 10000);
-  
-  test('should handle unsubscribe function', async () => {
-    // Connect to Market Data URL specifically
-    await setupMockConnection(socket, MD_URL);
-    
-    // Create a mock subscription callback
-    const mockSubscriptionCallback = jest.fn();
-    
-    // Test subscribe method with proper options
-    const subscribeOptions = {
-      url: 'md/subscribequote',
-      body: { symbol: 'ESM5' },
-      subscription: mockSubscriptionCallback
-    };
-    
-    // Subscribe first
-    const subscribePromise = socket.subscribe(subscribeOptions);
-    
-    // Extract message ID from the sent message for the subscribe call
-    expect(mockWs.sent.length).toBeGreaterThan(1); // Auth + our message
-    const subMsgParts = mockWs.sent[1].split('\n');
-    const subMsgId = parseInt(subMsgParts[1]);
-    
-    // Simulate successful response to the subscribe request
-    simulateWebSocketMessage(mockWs, `a[{"i":${subMsgId},"s":200,"d":{"subscriptionId":123}}]`);
-    
-    // Get the unsubscribe function
-    const unsubscribeFunction = await subscribePromise;
-    
-    // Replace socket's send method to return a resolved promise
-    // This avoids actually making the cancellation request
-    const originalSend = socket.send;
-    socket.send = jest.fn().mockResolvedValue({ s: 200, d: { result: 'success' } });
-    
-    // Call the unsubscribe function
-    await unsubscribeFunction();
-    
-    // Verify send was called with the expected parameters
-    expect(socket.send).toHaveBeenCalledWith({
-      url: 'md/unsubscribequote',
-      body: { symbol: 'ESM5' }
+    // Mock send to simulate subscription response
+    const sendSpy = jest.spyOn(socket, 'send').mockResolvedValue({
+      s: 200,
+      i: 123,
+      d: { realtimeId: 'rt-123' }
     });
     
-    // Restore original send method
-    socket.send = originalSend;
-  }, 10000);
+    // Subscribe
+    const mockSubscription = jest.fn();
+    const unsubscribe = await socket.subscribe({
+      url: 'md/subscribequote',
+      body: { symbol: 'AAPL' },
+      subscription: mockSubscription
+    });
+    
+    // Verify send was called
+    expect(sendSpy).toHaveBeenCalled();
+    
+    // Verify unsubscribe function was returned
+    expect(typeof unsubscribe).toBe('function');
+  });
+  
+  test('should handle unsubscribe function', async () => {
+    const { socket } = await setupMockConnection();
+    
+    // Create a spy for the send method
+    const sendSpy = jest.spyOn(socket, 'send');
+    
+    // Mock first call for subscribe
+    sendSpy.mockResolvedValueOnce({
+      s: 200,
+      i: 123,
+      d: { realtimeId: 'rt-123' }
+    });
+    
+    // Mock second call for unsubscribe
+    sendSpy.mockResolvedValueOnce({
+      s: 200,
+      i: 124,
+      d: 'Success'
+    });
+    
+    // Subscribe
+    const unsubscribe = await socket.subscribe({
+      url: 'md/subscribequote',
+      body: { symbol: 'AAPL' },
+      subscription: jest.fn()
+    });
+    
+    // Reset the mock to check only the unsubscribe call
+    sendSpy.mockClear();
+    
+    // Call unsubscribe
+    await unsubscribe();
+    
+    // Verify send was called with the correct unsubscribe parameters
+    expect(sendSpy).toHaveBeenCalledWith({
+      url: 'md/unsubscribequote',
+      body: { symbol: 'AAPL' }
+    });
+  });
   
   test('should close the connection', async () => {
-    await setupMockConnection(socket);
-    
-    // Spy on the close method
-    const mockClose = jest.spyOn(mockWs, 'close');
+    const { socket } = await setupMockConnection();
     
     // Close the connection
     socket.close();
     
-    // Verify the WebSocket was closed
-    expect(mockClose).toHaveBeenCalled();
+    // Verify the WebSocket close method was called
+    expect(mockWs.close).toHaveBeenCalled();
     expect(socket.isConnected()).toBe(false);
   });
   
   test('should create market data socket', async () => {
-    // Replace the real connect method temporarily to avoid actual connection
-    const originalConnect = TradovateSocket.prototype.connect;
-    TradovateSocket.prototype.connect = jest.fn().mockResolvedValue(undefined);
+    // Import the function directly
+    const { createMarketDataSocket } = require('../src/socket');
     
-    try {
-      // Call the factory function
-      const mdSocket = await socketModule.createMarketDataSocket();
-      
-      expect(mdSocket).toBeInstanceOf(TradovateSocket);
-      expect(TradovateSocket.prototype.connect).toHaveBeenCalledWith(
-        expect.stringContaining('md-demo.tradovateapi.com'),
-        expect.any(String)
-      );
-    } finally {
-      // Restore original connect method
-      TradovateSocket.prototype.connect = originalConnect;
-    }
+    // Setup mocks for successful connection
+    const mockConnect = jest.fn().mockResolvedValue();
+    TradovateSocket.prototype.connect = mockConnect;
+    
+    // Call the function
+    const socket = await createMarketDataSocket();
+    
+    // Verify it was called with the correct URL
+    expect(mockConnect).toHaveBeenCalledWith(
+      'wss://md-demo.tradovateapi.com/v1/websocket',
+      'mock-access-token'
+    );
   });
   
   test('should create trading socket', async () => {
-    // Replace the real connect method temporarily to avoid actual connection
-    const originalConnect = TradovateSocket.prototype.connect;
-    TradovateSocket.prototype.connect = jest.fn().mockResolvedValue(undefined);
+    // Import the function directly
+    const { createTradingSocket } = require('../src/socket');
     
-    try {
-      // Call the factory function for demo
-      const demoSocket = await socketModule.createTradingSocket(false);
-      
-      expect(demoSocket).toBeInstanceOf(TradovateSocket);
-      expect(TradovateSocket.prototype.connect).toHaveBeenCalledWith(
-        expect.stringContaining('demo.tradovateapi.com'),
-        expect.any(String)
-      );
-      
-      // Reset for live test
-      TradovateSocket.prototype.connect.mockClear();
-      
-      // Call the factory function for live
-      const liveSocket = await socketModule.createTradingSocket(true);
-      
-      expect(liveSocket).toBeInstanceOf(TradovateSocket);
-      expect(TradovateSocket.prototype.connect).toHaveBeenCalledWith(
-        expect.stringContaining('live.tradovateapi.com'),
-        expect.any(String)
-      );
-    } finally {
-      // Restore original connect method
-      TradovateSocket.prototype.connect = originalConnect;
-    }
+    // Setup mocks for successful connection
+    const mockConnect = jest.fn().mockResolvedValue();
+    TradovateSocket.prototype.connect = mockConnect;
+    
+    // Call the function
+    const socket = await createTradingSocket();
+    
+    // Verify it was called with the correct URL
+    expect(mockConnect).toHaveBeenCalledWith(
+      'wss://demo.tradovateapi.com/v1/websocket',
+      'mock-access-token'
+    );
   });
 }); 

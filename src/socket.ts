@@ -46,6 +46,235 @@ interface ResponseMessage {
 type Listener = (data: any) => void;
 type UnsubscribeFunction = () => void;
 
+// Connection status enum
+enum ConnectionStatus {
+  DISCONNECTED = 'disconnected',
+  CONNECTING = 'connecting',
+  CONNECTED = 'connected',
+  AUTHENTICATING = 'authenticating',
+  AUTHENTICATED = 'authenticated',
+  ERROR = 'error'
+}
+
+/**
+ * WebSocketManager - A singleton class to manage global WebSocket connections
+ * This allows tools to access already authenticated WebSockets without blocking
+ */
+export class WebSocketManager {
+  private static instance: WebSocketManager;
+  private marketDataSocket: TradovateSocket | null = null;
+  private tradingSocket: TradovateSocket | null = null;
+  private mdStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED;
+  private tradingStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED;
+  private connectPromises: {
+    md: Array<{ resolve: Function, reject: Function }>;
+    trading: Array<{ resolve: Function, reject: Function }>;
+  } = { md: [], trading: [] };
+
+  private constructor() {
+    // Private constructor to enforce singleton pattern
+    this.initializeConnections();
+  }
+
+  /**
+   * Get the singleton instance
+   */
+  public static getInstance(): WebSocketManager {
+    if (!WebSocketManager.instance) {
+      WebSocketManager.instance = new WebSocketManager();
+    }
+    return WebSocketManager.instance;
+  }
+
+  /**
+   * Initialize connections without blocking
+   * This starts connections in the background
+   */
+  private async initializeConnections() {
+    // Start both connections non-blocking
+    this.connectToMarketData();
+    this.connectToTrading();
+  }
+
+  /**
+   * Connect to market data socket in background
+   */
+  private async connectToMarketData() {
+    if (this.mdStatus === ConnectionStatus.CONNECTING || 
+        this.mdStatus === ConnectionStatus.AUTHENTICATING) {
+      return; // Already connecting
+    }
+    
+    this.mdStatus = ConnectionStatus.CONNECTING;
+    
+    try {
+      logger.info('Connecting to Market Data WebSocket in background...');
+      const { accessToken } = await getAccessToken();
+      
+      this.marketDataSocket = new TradovateSocket({ debugLabel: 'market-data' });
+      this.mdStatus = ConnectionStatus.AUTHENTICATING;
+      
+      await this.marketDataSocket.connect(URLS.MD_URL, accessToken);
+      
+      this.mdStatus = ConnectionStatus.AUTHENTICATED;
+      logger.info('Market Data WebSocket connected and authenticated successfully');
+      
+      // Resolve any pending promises
+      this.connectPromises.md.forEach(promise => promise.resolve(this.marketDataSocket));
+      this.connectPromises.md = [];
+    } catch (error) {
+      this.mdStatus = ConnectionStatus.ERROR;
+      logger.error('Failed to connect to Market Data WebSocket:', error);
+      
+      // Reject any pending promises
+      this.connectPromises.md.forEach(promise => 
+        promise.reject(new Error(`Failed to connect to Market Data WebSocket: ${error}`))
+      );
+      this.connectPromises.md = [];
+      
+      // Try to reconnect after delay
+      setTimeout(() => {
+        this.mdStatus = ConnectionStatus.DISCONNECTED;
+        this.connectToMarketData();
+      }, 5000);
+    }
+  }
+
+  /**
+   * Connect to trading socket in background
+   */
+  private async connectToTrading(useLive: boolean = false) {
+    if (this.tradingStatus === ConnectionStatus.CONNECTING || 
+        this.tradingStatus === ConnectionStatus.AUTHENTICATING) {
+      return; // Already connecting
+    }
+    
+    this.tradingStatus = ConnectionStatus.CONNECTING;
+    
+    try {
+      const environment = useLive ? 'live' : 'demo';
+      logger.info(`Connecting to Trading WebSocket (${environment}) in background...`);
+      const { accessToken } = await getAccessToken();
+      
+      const url = useLive ? URLS.WS_LIVE_URL : URLS.WS_DEMO_URL;
+      this.tradingSocket = new TradovateSocket({ 
+        debugLabel: useLive ? 'trading-live' : 'trading-demo' 
+      });
+      
+      this.tradingStatus = ConnectionStatus.AUTHENTICATING;
+      await this.tradingSocket.connect(url, accessToken);
+      
+      this.tradingStatus = ConnectionStatus.AUTHENTICATED;
+      logger.info(`Trading WebSocket (${environment}) connected and authenticated successfully`);
+      
+      // Resolve any pending promises
+      this.connectPromises.trading.forEach(promise => promise.resolve(this.tradingSocket));
+      this.connectPromises.trading = [];
+    } catch (error) {
+      this.tradingStatus = ConnectionStatus.ERROR;
+      logger.error('Failed to connect to Trading WebSocket:', error);
+      
+      // Reject any pending promises
+      this.connectPromises.trading.forEach(promise => 
+        promise.reject(new Error(`Failed to connect to Trading WebSocket: ${error}`))
+      );
+      this.connectPromises.trading = [];
+      
+      // Try to reconnect after delay
+      setTimeout(() => {
+        this.tradingStatus = ConnectionStatus.DISCONNECTED;
+        this.connectToTrading(useLive);
+      }, 5000);
+    }
+  }
+
+  /**
+   * Get market data socket - returns existing socket or connects if needed
+   * This won't block if the socket is already connected
+   */
+  public getMarketDataSocket(): Promise<TradovateSocket> {
+    return new Promise((resolve, reject) => {
+      // If already connected, return immediately
+      if (this.mdStatus === ConnectionStatus.AUTHENTICATED && this.marketDataSocket) {
+        resolve(this.marketDataSocket);
+        return;
+      }
+      
+      // Add to queue of promises to resolve when connection completes
+      this.connectPromises.md.push({ resolve, reject });
+      
+      // If not already connecting, start connection
+      if (this.mdStatus === ConnectionStatus.DISCONNECTED) {
+        this.connectToMarketData();
+      }
+    });
+  }
+
+  /**
+   * Get trading socket - returns existing socket or connects if needed
+   * This won't block if the socket is already connected
+   */
+  public getTradingSocket(useLive: boolean = false): Promise<TradovateSocket> {
+    return new Promise((resolve, reject) => {
+      // If already connected, return immediately
+      if (this.tradingStatus === ConnectionStatus.AUTHENTICATED && this.tradingSocket) {
+        resolve(this.tradingSocket);
+        return;
+      }
+      
+      // Add to queue of promises to resolve when connection completes
+      this.connectPromises.trading.push({ resolve, reject });
+      
+      // If not already connecting, start connection
+      if (this.tradingStatus === ConnectionStatus.DISCONNECTED) {
+        this.connectToTrading(useLive);
+      }
+    });
+  }
+
+  /**
+   * Get the connection status for market data
+   */
+  public getMarketDataStatus(): ConnectionStatus {
+    return this.mdStatus;
+  }
+
+  /**
+   * Get the connection status for trading
+   */
+  public getTradingStatus(): ConnectionStatus {
+    return this.tradingStatus;
+  }
+
+  /**
+   * Close all connections
+   */
+  public closeAll() {
+    if (this.marketDataSocket) {
+      this.marketDataSocket.close();
+      this.marketDataSocket = null;
+      this.mdStatus = ConnectionStatus.DISCONNECTED;
+    }
+    
+    if (this.tradingSocket) {
+      this.tradingSocket.close();
+      this.tradingSocket = null;
+      this.tradingStatus = ConnectionStatus.DISCONNECTED;
+    }
+    
+    // Reject any pending promises
+    this.connectPromises.md.forEach(promise => 
+      promise.reject(new Error('Connection closed'))
+    );
+    this.connectPromises.md = [];
+    
+    this.connectPromises.trading.forEach(promise => 
+      promise.reject(new Error('Connection closed'))
+    );
+    this.connectPromises.trading = [];
+  }
+}
+
 /**
  * A generic implementation for the Tradovate real-time APIs WebSocket client.
  */
@@ -125,19 +354,30 @@ export class TradovateSocket {
         this.ws.addEventListener('message', function onConnect(msg) {
           try {
             const [T, _] = prepareMessage(msg.data.toString());
-            logger.info(`Received authentication message: ${T}`);
+            logger.debug(`Received authentication message: ${T}`);
             if (T === 'o') {
               // Instead of using self.send(), directly send the authorization message
               // This avoids the connected flag check in the send() method
               if (self.ws) {
                 const id = self.increment();
-                const authMessage = `authorize\n${id}\n\n${JSON.stringify({ token })}`;
-                logger.info(`Sending authorization message with ID ${id}`);
+                
+                // Format the auth message based on whether it's a Tradovate API URL
+                // Tradovate URLs contain 'tradovateapi.com' 
+                let authMessage: string;
+                if (url.includes('tradovateapi.com')) {
+                  // Format for Tradovate API - token as proper JSON
+                  authMessage = `authorize\n2\n\n${token}`;
+                  logger.info(`Sending Tradovate API authorization message with ID ${id}`);
+                } else {
+                  // Format for MCP server - token as raw string with newline
+                  authMessage = `authorize\n2\n\n${token}\n`;
+                  logger.info(`Sending MCP authorization message with ID ${id}`);
+                }
                 
                 // Create a one-time message handler for the auth response
                 const authResponseHandler = (authMsg: WebSocket.MessageEvent) => {
                   try {
-                    logger.info(`Received auth response: ${authMsg.data.toString()}`);
+                    logger.debug(`Received auth response: ${authMsg.data.toString()}`);
                     const [_, authData] = prepareMessage(authMsg.data.toString());
                     
                     for (const item of authData) {
@@ -444,64 +684,46 @@ function prepareMessage(raw: string): [string, any[]] {
 
 /**
  * Create a new socket connection with the Tradovate Market Data API
+ * This uses the WebSocketManager to avoid blocking operations
  */
 export async function createMarketDataSocket(retryCount = 2): Promise<TradovateSocket> {
   try {
-    logger.info('Creating Market Data WebSocket connection...');
-    
-    // Get a fresh access token for every attempt
-    const { accessToken } = await getAccessToken();
-    logger.info('Obtained access token for Market Data WebSocket');
-    
-    // Create and connect the socket
-    const socket = new TradovateSocket({ debugLabel: 'market-data' });
-    await socket.connect(URLS.MD_URL, accessToken);
-    logger.info('Market Data WebSocket connected and authenticated successfully');
-    return socket;
+    // Get socket from manager - this won't block if already connected
+    const socketManager = WebSocketManager.getInstance();
+    return await socketManager.getMarketDataSocket();
   } catch (error) {
-    logger.error('Error connecting to Market Data WebSocket:', error);
+    logger.error('Error getting Market Data WebSocket:', error);
     
     // Retry logic
     if (retryCount > 0) {
       logger.info(`Retrying Market Data WebSocket connection (${retryCount} attempts left)...`);
-      await waitForMs(2000); // Wait before retry
+      await waitForMs(2000);
       return createMarketDataSocket(retryCount - 1);
     }
     
-    // If all retries fail, throw the error
-    throw new Error(`Failed to connect to Market Data WebSocket after retries: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Failed to get Market Data WebSocket: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 /**
  * Create a new socket connection with the Tradovate WebSocket API (demo or live)
+ * This uses the WebSocketManager to avoid blocking operations
  */
 export async function createTradingSocket(useLive: boolean = false, retryCount = 2): Promise<TradovateSocket> {
   try {
-    const environment = useLive ? 'live' : 'demo';
-    logger.info(`Creating Trading WebSocket connection to ${environment} environment...`);
-    
-    // Get a fresh access token for every attempt
-    const { accessToken } = await getAccessToken();
-    logger.info(`Obtained access token for Trading WebSocket (${environment})`);
-    
-    // Create and connect the socket
-    const url = useLive ? URLS.WS_LIVE_URL : URLS.WS_DEMO_URL;
-    const socket = new TradovateSocket({ debugLabel: useLive ? 'trading-live' : 'trading-demo' });
-    await socket.connect(url, accessToken);
-    logger.info(`Trading WebSocket connected and authenticated successfully to ${environment} environment`);
-    return socket;
+    // Get socket from manager - this won't block if already connected
+    const socketManager = WebSocketManager.getInstance();
+    return await socketManager.getTradingSocket(useLive);
   } catch (error) {
-    logger.error(`Error connecting to Trading WebSocket:`, error);
+    logger.error('Error getting Trading WebSocket:', error);
     
     // Retry logic
     if (retryCount > 0) {
       logger.info(`Retrying Trading WebSocket connection (${retryCount} attempts left)...`);
-      await waitForMs(2000); // Wait before retry
+      await waitForMs(2000);
       return createTradingSocket(useLive, retryCount - 1);
     }
     
-    // If all retries fail, throw the error
-    throw new Error(`Failed to connect to Trading WebSocket after retries: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Failed to get Trading WebSocket: ${error instanceof Error ? error.message : String(error)}`);
   }
 } 

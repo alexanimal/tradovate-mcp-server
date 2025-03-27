@@ -56,7 +56,7 @@ import {
 import { connect } from "./connect.js";
 import { getTradovateMdApiUrl } from "./auth.js";
 import { WebSocket } from "ws";
-import { TradovateSocket, createMarketDataSocket, createTradingSocket } from "./socket.js";
+import { TradovateSocket, createMarketDataSocket, createTradingSocket, WebSocketManager } from "./socket.js";
 
 // Add global declaration for tradovate sockets
 declare global {
@@ -746,94 +746,31 @@ export async function initialize() {
  */
 export async function main() {
   try {
-    logger.info("Initializing Tradovate MCP server with WebSockets...");
+    logger.info("Initializing Tradovate MCP server...");
     
     // Initialize authentication first to ensure we have valid tokens
     await authenticate();
     logger.info("Authentication successful");
     
-    // A flag to track if at least one WebSocket connection is established
-    let hasAtLeastOneConnection = false;
-    
-    // Initialize WebSocket connections in sequence with individual error handling
-    try {
-      // Initialize market data socket
-      global.marketDataSocket = await createMarketDataSocket();
-      logger.info("Market Data WebSocket connected successfully");
-      hasAtLeastOneConnection = true;
-    } catch (mdError) {
-      logger.error("Failed to connect to Market Data WebSocket:", mdError);
-      logger.warn("Market data functionality will be limited");
-    }
-    
-    try {
-      // Connect to trading socket (use demo environment by default)
-      const useLiveTrading = process.env.TRADOVATE_API_ENVIRONMENT === 'live';
-      global.tradingSocket = await createTradingSocket(useLiveTrading);
-      logger.info(`Trading WebSocket connected successfully to ${useLiveTrading ? 'live' : 'demo'} environment`);
-      hasAtLeastOneConnection = true;
-    } catch (tradeError) {
-      logger.error("Failed to connect to Trading WebSocket:", tradeError);
-      logger.warn("Trading functionality will be limited");
-    }
-    
-    try {
-      // For backward compatibility - using the existing code that uses this global
-      const ws = new WebSocket(getTradovateMdApiUrl());
-      global.tradovateWs = await connect(ws);
-      logger.info("Legacy WebSocket connected successfully");
-      hasAtLeastOneConnection = true;
-    } catch (legacyError) {
-      logger.error("Failed to connect legacy WebSocket:", legacyError);
-      logger.warn("Legacy WebSocket functionality will be unavailable");
-    }
-    
-    // Warn if no WebSocket connections were established
-    if (!hasAtLeastOneConnection) {
-      logger.warn("No WebSocket connections could be established. Real-time data functionality will be unavailable.");
-      logger.warn("The server will continue in limited functionality mode.");
-    }
-    
-    // Initialize data and authenticate
+    // Initialize data - this doesn't rely on WebSockets
     await initialize();
     
-    // Start MCP server
+    // Start MCP server - do this early to ensure server is responsive
+    logger.info("Starting MCP server...");
     const transport = new StdioServerTransport();
     await server.connect(transport);
     logger.info("MCP Server started successfully");
+    
+    // Initialize WebSockets in the background - non-blocking
+    // This ensures the server is responsive even while connections are being established
+    initializeWebSockets();
     
     // Register signal handlers for graceful shutdown
     process.on('SIGINT', async () => {
       console.log('\nReceived SIGINT (Ctrl+C). Gracefully shutting down...');
       try {
         // Close WebSocket connections
-        if (global.tradovateWs) {
-          logger.info('Closing legacy WebSocket connection...');
-          try {
-            global.tradovateWs.close();
-          } catch (err) {
-            logger.warn('Error closing legacy WebSocket:', err);
-          }
-        }
-        
-        if (global.marketDataSocket) {
-          logger.info('Closing Market Data WebSocket connection...');
-          try {
-            global.marketDataSocket.close();
-          } catch (err) {
-            logger.warn('Error closing Market Data WebSocket:', err);
-          }
-        }
-        
-        if (global.tradingSocket) {
-          logger.info('Closing Trading WebSocket connection...');
-          try {
-            global.tradingSocket.close();
-          } catch (err) {
-            logger.warn('Error closing Trading WebSocket:', err);
-          }
-        }
-        
+        closeAllWebSocketConnections();
         logger.info('All connections closed successfully');
         process.exit(0);
       } catch (error) {
@@ -847,16 +784,7 @@ export async function main() {
       console.log('\nReceived SIGTERM. Gracefully shutting down...');
       try {
         // Close WebSocket connections
-        if (global.tradovateWs) {
-          try { global.tradovateWs.close(); } catch (err) { logger.warn('Error closing legacy WebSocket:', err); }
-        }
-        if (global.marketDataSocket) {
-          try { global.marketDataSocket.close(); } catch (err) { logger.warn('Error closing Market Data WebSocket:', err); }
-        }
-        if (global.tradingSocket) {
-          try { global.tradingSocket.close(); } catch (err) { logger.warn('Error closing Trading WebSocket:', err); }
-        }
-        
+        closeAllWebSocketConnections();
         logger.info('All connections closed successfully');
         process.exit(0);
       } catch (error) {
@@ -886,11 +814,119 @@ export async function main() {
       const transport = new StdioServerTransport();
       await server.connect(transport);
       logger.info("MCP Server started in limited functionality mode");
+      
+      // Try to initialize WebSockets in the background
+      initializeWebSockets();
     } catch (serverError) {
       logger.error("Fatal error starting server:", serverError);
       process.exit(1);
     }
   }
+}
+
+/**
+ * Helper function to close all WebSocket connections
+ */
+function closeAllWebSocketConnections() {
+  // Close WebSocket connections managed by WebSocketManager
+  try { 
+    WebSocketManager.getInstance().closeAll(); 
+    logger.info('Closed WebSocketManager connections');
+  } catch (err) { 
+    logger.warn('Error closing WebSocketManager connections:', err); 
+  }
+  
+  // Close any direct WebSocket connections
+  if (global.tradovateWs) {
+    try { global.tradovateWs.close(); logger.info('Closed legacy WebSocket'); } 
+    catch (err) { logger.warn('Error closing legacy WebSocket:', err); }
+  }
+  if (global.marketDataSocket) {
+    try { global.marketDataSocket.close(); logger.info('Closed Market Data WebSocket'); } 
+    catch (err) { logger.warn('Error closing Market Data WebSocket:', err); }
+  }
+  if (global.tradingSocket) {
+    try { global.tradingSocket.close(); logger.info('Closed Trading WebSocket'); } 
+    catch (err) { logger.warn('Error closing Trading WebSocket:', err); }
+  }
+}
+
+/**
+ * Initialize WebSockets in the background
+ * This function sets up WebSocket connections without blocking the MCP server
+ */
+function initializeWebSockets() {
+  logger.info('Initializing WebSocket connections in background...');
+  
+  // Get the singleton instance - this starts connections in the background
+  const socketManager = WebSocketManager.getInstance();
+  
+  // Log initial connection statuses
+  logger.info(`Market Data WebSocket initial status: ${socketManager.getMarketDataStatus()}`);
+  logger.info(`Trading WebSocket initial status: ${socketManager.getTradingStatus()}`);
+  
+  // Initialize connections happened automatically in the constructor
+  logger.info('WebSocket initialization started. Connections will be established in the background.');
+  
+  // For compatibility with legacy code - set up global references
+  // These will be initialized asynchronously without blocking
+  setupGlobalWebSocketReferences();
+}
+
+/**
+ * Set up global WebSocket references without blocking
+ * This ensures backward compatibility with code expecting global WebSockets
+ */
+async function setupGlobalWebSocketReferences() {
+  const socketManager = WebSocketManager.getInstance();
+  
+  // Set up market data socket reference
+  socketManager.getMarketDataSocket()
+    .then(socket => {
+      global.marketDataSocket = socket;
+      logger.info('Global market data socket reference established');
+    })
+    .catch(error => {
+      logger.error('Failed to establish global market data socket reference:', error);
+      logger.warn('Market data functionality will be limited');
+    });
+  
+  // Set up trading socket reference
+  const useLiveTrading = process.env.TRADOVATE_API_ENVIRONMENT === 'live';
+  socketManager.getTradingSocket(useLiveTrading)
+    .then(socket => {
+      global.tradingSocket = socket;
+      logger.info(`Global trading socket reference established (${useLiveTrading ? 'live' : 'demo'})`);
+    })
+    .catch(error => {
+      logger.error('Failed to establish global trading socket reference:', error);
+      logger.warn('Trading functionality will be limited');
+    });
+  
+  // For legacy WebSocket compatibility
+  try {
+    const ws = new WebSocket(getTradovateMdApiUrl());
+    connect(ws)
+      .then(legacySocket => {
+        global.tradovateWs = legacySocket;
+        logger.info('Global legacy WebSocket reference established');
+      })
+      .catch(error => {
+        logger.error('Failed to establish legacy WebSocket reference:', error);
+        logger.warn('Legacy WebSocket functionality will be unavailable');
+      });
+  } catch (error) {
+    logger.error('Error creating legacy WebSocket:', error);
+    logger.warn('Legacy WebSocket functionality will be unavailable');
+  }
+  
+  // Log a status update after 30 seconds
+  setTimeout(() => {
+    logger.info('WebSocket connection status after 30 seconds:');
+    logger.info(`Market Data WebSocket: ${socketManager.getMarketDataStatus()}`);
+    logger.info(`Trading WebSocket: ${socketManager.getTradingStatus()}`);
+    logger.info(`Legacy WebSocket: ${global.tradovateWs ? 'Connected' : 'Not connected'}`);
+  }, 30000);
 }
 
 // Only run main if this file is executed directly
@@ -908,3 +944,7 @@ if (!isTestEnvironment) {
     });
   }
 }
+
+// Initialize WebSockets in the background at startup - this is separate from main()
+// to ensure it happens even if the file is imported rather than run directly
+initializeWebSockets();
